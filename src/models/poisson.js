@@ -74,6 +74,18 @@ export function poissonPrediction(lambdaHome, lambdaAway) {
   const over35 = 1 - poissonCdf(3, totalLambda);
   const btts   = (1 - poissonPmf(0, lambdaHome)) * (1 - poissonPmf(0, lambdaAway));
 
+  // Per-team over/under (individual team goal totals, not match total)
+  const teamOverHome = {
+    0.5: 1 - poissonCdf(0, lambdaHome),
+    1.5: 1 - poissonCdf(1, lambdaHome),
+    2.5: 1 - poissonCdf(2, lambdaHome),
+  };
+  const teamOverAway = {
+    0.5: 1 - poissonCdf(0, lambdaAway),
+    1.5: 1 - poissonCdf(1, lambdaAway),
+    2.5: 1 - poissonCdf(2, lambdaAway),
+  };
+
   const htLH = lambdaHome * 0.42;
   const htLA = lambdaAway * 0.42;
   let htHome = 0, htDraw = 0, htAway = 0;
@@ -94,6 +106,14 @@ export function poissonPrediction(lambdaHome, lambdaAway) {
     scores: normalScores,
     over:  { 1.5: over15, 2.5: over25, 3.5: over35 },
     under: { 1.5: 1-over15, 2.5: 1-over25, 3.5: 1-over35 },
+    teamOver: {
+      home: teamOverHome,
+      away: teamOverAway,
+    },
+    teamUnder: {
+      home: { 0.5: 1-teamOverHome[0.5], 1.5: 1-teamOverHome[1.5], 2.5: 1-teamOverHome[2.5] },
+      away: { 0.5: 1-teamOverAway[0.5], 1.5: 1-teamOverAway[1.5], 2.5: 1-teamOverAway[2.5] },
+    },
     btts,
     halfTime: { home: htHome/htTot, draw: htDraw/htTot, away: htAway/htTot },
     lambdaHome,

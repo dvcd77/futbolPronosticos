@@ -11,6 +11,9 @@ function runBatch(lambdaHome, lambdaAway, n) {
   let over15 = 0, over25 = 0, over35 = 0;
   let btts = 0;
   let htHome = 0, htDraw = 0, htAway = 0;
+  // Per-team goal totals (individual team over/under lines)
+  let homeOver05 = 0, homeOver15 = 0, homeOver25 = 0;
+  let awayOver05 = 0, awayOver15 = 0, awayOver25 = 0;
   const scoreCounts = {};
 
   // HT lambda (42% of FT expected goals)
@@ -31,6 +34,14 @@ function runBatch(lambdaHome, lambdaAway, n) {
     if (total > 3.5) over35++;
     if (hg > 0 && ag > 0) btts++;
 
+    // Per-team goal lines
+    if (hg > 0.5) homeOver05++;
+    if (hg > 1.5) homeOver15++;
+    if (hg > 2.5) homeOver25++;
+    if (ag > 0.5) awayOver05++;
+    if (ag > 1.5) awayOver15++;
+    if (ag > 2.5) awayOver25++;
+
     const key = `${Math.min(hg, MAX_GOALS_TRACK)}-${Math.min(ag, MAX_GOALS_TRACK)}`;
     scoreCounts[key] = (scoreCounts[key] || 0) + 1;
 
@@ -42,7 +53,13 @@ function runBatch(lambdaHome, lambdaAway, n) {
     else htAway++;
   }
 
-  return { home, draw, away, over15, over25, over35, btts, htHome, htDraw, htAway, scoreCounts, n };
+  return {
+    home, draw, away, over15, over25, over35, btts,
+    htHome, htDraw, htAway,
+    homeOver05, homeOver15, homeOver25,
+    awayOver05, awayOver15, awayOver25,
+    scoreCounts, n,
+  };
 }
 
 /**
@@ -67,13 +84,17 @@ export function runMonteCarlo(lambdaHome, lambdaAway, totalSims = 20000, numBatc
   const homeRates  = rates('home');
   const drawRates  = rates('draw');
   const awayRates  = rates('away');
-  const o15Rates   = rates('over15');
-  const o25Rates   = rates('over25');
-  const o35Rates   = rates('over35');
+  const o15Rates    = rates('over15');
+  const o25Rates    = rates('over25');
+  const o35Rates    = rates('over35');
   const bttsRates  = rates('btts');
   const htHRates   = rates('htHome');
   const htDRates   = rates('htDraw');
   const htARates   = rates('htAway');
+
+  // Per-team over/under rates
+  const hO05 = rates('homeOver05'), hO15 = rates('homeOver15'), hO25 = rates('homeOver25');
+  const aO05 = rates('awayOver05'), aO15 = rates('awayOver15'), aO25 = rates('awayOver25');
 
   // Aggregate scores across all batches
   const allScores = {};
@@ -87,6 +108,17 @@ export function runMonteCarlo(lambdaHome, lambdaAway, totalSims = 20000, numBatc
 
   const fmt = (v, d = 4) => Math.round(v * 10 ** d) / 10 ** d;
   const fmtStd = v => Math.round(v * 1000) / 1000;
+
+  // Helper to build { over, under, overStd } for a set of line rates
+  const buildTeamLines = (r05, r15, r25) => ({
+    over: { 0.5: fmt(mean(r05)), 1.5: fmt(mean(r15)), 2.5: fmt(mean(r25)) },
+    under: {
+      0.5: fmt(1 - mean(r05)), 1.5: fmt(1 - mean(r15)), 2.5: fmt(1 - mean(r25)),
+    },
+    overStd: {
+      0.5: fmtStd(stdDev(r05)), 1.5: fmtStd(stdDev(r15)), 2.5: fmtStd(stdDev(r25)),
+    },
+  });
 
   return {
     totalSims: actualTotal,
@@ -104,6 +136,7 @@ export function runMonteCarlo(lambdaHome, lambdaAway, totalSims = 20000, numBatc
 
     scores: normScores,
 
+    // Match-total over/under (combined goals)
     over: {
       1.5: fmt(mean(o15Rates)),
       2.5: fmt(mean(o25Rates)),
@@ -118,6 +151,12 @@ export function runMonteCarlo(lambdaHome, lambdaAway, totalSims = 20000, numBatc
       1.5: fmtStd(stdDev(o15Rates)),
       2.5: fmtStd(stdDev(o25Rates)),
       3.5: fmtStd(stdDev(o35Rates)),
+    },
+
+    // Per-team over/under (individual team goal totals)
+    teamGoals: {
+      home: buildTeamLines(hO05, hO15, hO25),
+      away: buildTeamLines(aO05, aO15, aO25),
     },
 
     btts: fmt(mean(bttsRates)),

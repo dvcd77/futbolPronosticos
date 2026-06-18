@@ -126,7 +126,8 @@ export default function MatchPredictor() {
         : runMonteCarlo(active.lambdaHome ?? lH_p, active.lambdaAway ?? lA_p, simCount);
 
       setAllModelResults(models);
-      setResult({ ...mcResult, model: activeModel, useStaticFallback: !hasData });    } catch (e) {
+      setResult({ ...mcResult, model: activeModel, useStaticFallback: !hasData });
+    } catch (e) {
       setError(e.message ?? 'Error al calcular el pronóstico.');
     } finally {
       setLoading(false);
@@ -400,6 +401,80 @@ export default function MatchPredictor() {
                   homeLabel={homeTeam?.tla ?? 'Local'}
                   awayLabel={awayTeam?.tla ?? 'Visitante'} />
               </div>
+
+              {/* Per-team Over/Under */}
+              {result.teamGoals && (
+                <div className="card">
+                  <SectionTitle sub="Goles individuales de cada equipo (independiente del marcador del rival)">
+                    Over/Under goles por equipo
+                  </SectionTitle>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+                    {[
+                      { team: homeTeam, side: 'home', color: '#00D4AA' },
+                      { team: awayTeam, side: 'away', color: '#F5A623' },
+                    ].map(({ team, side, color }) => {
+                      const tg = result.teamGoals[side];
+                      return (
+                        <div key={side}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color, marginBottom: 10 }}>
+                            {team?.name ?? (side === 'home' ? 'Local' : 'Visitante')}
+                          </div>
+
+                          {/* Column headers */}
+                          <div style={{ display: 'grid', gridTemplateColumns: '44px 1fr 1fr', gap: 6, marginBottom: 8 }}>
+                            <div />
+                            <div className="label-sm" style={{ textAlign: 'center', fontSize: 9 }}>Más de</div>
+                            <div className="label-sm" style={{ textAlign: 'center', fontSize: 9 }}>Menos de</div>
+                          </div>
+
+                          {['0.5', '1.5', '2.5'].map(line => {
+                            const over  = tg.over?.[line];
+                            const under = tg.under?.[line];
+                            const std   = tg.overStd?.[line];
+                            if (over == null) return null;
+                            return (
+                              <div key={line} style={{ display: 'grid', gridTemplateColumns: '44px 1fr 1fr', gap: 6, marginBottom: 10 }}>
+                                <div style={{ fontFamily: 'monospace', fontSize: 12, color: '#5a7a9a', paddingTop: 4, fontWeight: 600 }}>
+                                  {line}
+                                </div>
+                                {/* Over */}
+                                <div>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                                    <span style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 12, color }}>
+                                      {(over * 100).toFixed(1)}%
+                                    </span>
+                                    {std != null && <span className="std-badge" style={{ fontSize: 9 }}>±{(std * 100).toFixed(1)}%</span>}
+                                  </div>
+                                  <div style={{ background: '#162844', borderRadius: 4, height: 6, overflow: 'hidden' }}>
+                                    <div style={{ width: `${over * 100}%`, height: '100%', borderRadius: 4, background: color, transition: 'width .7s' }} />
+                                  </div>
+                                </div>
+                                {/* Under */}
+                                <div>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                                    <span style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 12, color: '#5a7a9a' }}>
+                                      {(under * 100).toFixed(1)}%
+                                    </span>
+                                    {std != null && <span className="std-badge" style={{ fontSize: 9 }}>±{(std * 100).toFixed(1)}%</span>}
+                                  </div>
+                                  <div style={{ background: '#162844', borderRadius: 4, height: 6, overflow: 'hidden' }}>
+                                    <div style={{ width: `${under * 100}%`, height: '100%', borderRadius: 4, background: '#5a7a9a', transition: 'width .7s' }} />
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div style={{ fontSize: 11, color: '#3a5070', marginTop: 4, borderTop: '1px solid #162844', paddingTop: 10 }}>
+                    Ej: "{homeTeam?.tla ?? 'Local'} Más de 1.5" = probabilidad de que {homeTeam?.name ?? 'el local'} anote 2 o más goles, sin importar el resultado del rival.
+                  </div>
+                </div>
+              )}
 
               {/* Quick model switcher */}
               {allModelResults && (
