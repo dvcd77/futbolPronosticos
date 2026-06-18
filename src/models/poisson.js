@@ -78,18 +78,20 @@ export function poissonPrediction(lambdaHome, lambdaAway) {
   // BTTS (both teams to score)
   const btts = (1 - poissonPmf(0, lambdaHome)) * (1 - poissonPmf(0, lambdaAway));
 
-  // Half-time: use 42% of expected goals per half
+  // Half-time: 42% of expected goals materialise in first half
   const htLH = lambdaHome * 0.42;
   const htLA = lambdaAway * 0.42;
   let htHome = 0, htDraw = 0, htAway = 0;
-  for (let h = 0; h <= 5; h++) {
-    for (let a = 0; a <= 5; a++) {
+  for (let h = 0; h <= 7; h++) {
+    for (let a = 0; a <= 7; a++) {
       const p = poissonPmf(h, htLH) * poissonPmf(a, htLA);
       if (h > a) htHome += p;
       else if (h === a) htDraw += p;
       else htAway += p;
     }
   }
+  // Normalize HT probabilities (truncation at 7 goals leaves tiny residual)
+  const htTot = htHome + htDraw + htAway || 1;
 
   return {
     home: home / tot,
@@ -99,7 +101,7 @@ export function poissonPrediction(lambdaHome, lambdaAway) {
     over: { 1.5: over15, 2.5: over25, 3.5: over35 },
     under: { 1.5: 1 - over15, 2.5: 1 - over25, 3.5: 1 - over35 },
     btts,
-    halfTime: { home: htHome, draw: htDraw, away: htAway },
+    halfTime: { home: htHome / htTot, draw: htDraw / htTot, away: htAway / htTot },
     lambdaHome,
     lambdaAway,
   };

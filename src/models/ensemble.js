@@ -23,19 +23,24 @@ export const DEFAULT_WEIGHTS = {
  * Combines predictions from multiple models using configurable weights.
  * Operates on lambdas (expected goals) for a richer combination.
  *
- * @param {Object} modelPredictions - { poisson: {lambdaHome, lambdaAway, ...}, elo: {...}, ... }
- * @param {Object} weights - { poisson: 0.25, elo: 0.20, form: 0.25, xg: 0.20, ml: 0.10 }
- * @param {number} simCount - Monte Carlo simulation count
- * @returns Combined prediction with std dev
+ * @param {Object} modelPredictions - only models with real (non-aliased) predictions
+ * @param {Object} weights          - { poisson: 0.25, elo: 0.20, ... }
+ * @param {number} simCount         - Monte Carlo simulation count
  */
 export function ensemblePrediction(modelPredictions, weights = DEFAULT_WEIGHTS, simCount = 20000) {
-  const availableModels = MODEL_IDS.filter(id => modelPredictions[id]);
+  const availableModels = MODEL_IDS.filter(id => modelPredictions[id] != null);
   if (availableModels.length === 0) return null;
 
-  // Normalize weights to available models
+  // Normalize weights to the models that are actually present
   const totalW = availableModels.reduce((s, id) => s + (weights[id] ?? 0), 0);
+  if (totalW <= 0) {
+    // All weights are zero: fall back to equal weighting
+    const eq = 1 / availableModels.length;
+    availableModels.forEach(id => { weights = { ...weights, [id]: eq }; });
+  }
+  const normTotal = availableModels.reduce((s, id) => s + (weights[id] ?? 0), 0);
   const normW = {};
-  availableModels.forEach(id => { normW[id] = (weights[id] ?? 0) / (totalW || 1); });
+  availableModels.forEach(id => { normW[id] = (weights[id] ?? 0) / normTotal; });
 
   // Weighted mean of expected goals
   const lambdaHome = availableModels.reduce((s, id) =>

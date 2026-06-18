@@ -50,17 +50,35 @@ export function ProbBar({ label, value, std, color, showPct = true, height = 8 }
   );
 }
 
-// ── Team selector dropdown ────────────────────────────────────────────────────
+// ── Team selector dropdown with confederation grouping ────────────────────────
 export function TeamSelector({ teams, value, onChange, label, excludeId }) {
   const available = teams.filter(t => t.id !== excludeId);
+
+  // Group by confederation
+  const confOrder = ['UEFA', 'CONMEBOL', 'CONCACAF', 'AFC', 'CAF', 'OFC'];
+  const confLabel = {
+    UEFA: '🇪🇺 UEFA', CONMEBOL: '🌎 CONMEBOL', CONCACAF: '🌎 CONCACAF',
+    AFC: '🌏 AFC', CAF: '🌍 CAF', OFC: '🌊 OFC',
+  };
+  const grouped = {};
+  available.forEach(t => {
+    const c = t.conf ?? 'Otros';
+    if (!grouped[c]) grouped[c] = [];
+    grouped[c].push(t);
+  });
+
   return (
     <div>
       <div className="label-sm mb-2">{label}</div>
       <div style={{ position: 'relative' }}>
         <select value={value ?? ''} onChange={e => onChange(e.target.value ? Number(e.target.value) : null)}>
           <option value="">— Seleccionar equipo —</option>
-          {available.map(t => (
-            <option key={t.id} value={t.id}>{t.name}</option>
+          {confOrder.filter(c => grouped[c]).map(conf => (
+            <optgroup key={conf} label={confLabel[conf] ?? conf}>
+              {grouped[conf].sort((a, b) => a.name.localeCompare(b.name, 'es')).map(t => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </optgroup>
           ))}
         </select>
         <div style={{

@@ -88,19 +88,25 @@ async function fetchCached(url, ttl) {
 
 // ── Public API functions ──────────────────────────────────────────────────────
 
-/** Test API key validity */
+/** Test API key validity — returns { ok, message, competitions } */
 export async function testApiKey(key) {
-  const prev = localStorage.getItem('fdapi_key');
-  localStorage.setItem('fdapi_key', key);
+  // Always save the key first (never delete it based on test result)
+  localStorage.setItem('fdapi_key', key.trim());
   try {
-    const res = await fetch(`${BASE_URL}/competitions/WC`, {
-      headers: { 'X-Auth-Token': key },
+    // Use /competitions — works with any valid free-tier key
+    const res = await fetch(`${BASE_URL}/competitions`, {
+      headers: { 'X-Auth-Token': key.trim() },
     });
-    if (!res.ok) { localStorage.setItem('fdapi_key', prev ?? ''); return false; }
-    return true;
-  } catch {
-    localStorage.setItem('fdapi_key', prev ?? '');
-    return false;
+    if (res.status === 400) return { ok: false, message: 'API key inválida (400). Verifica que la copiaste completa.' };
+    if (res.status === 403) return { ok: false, message: 'Key inválida o cuenta no verificada (403). ¿Confirmaste tu correo en football-data.org?' };
+    if (res.status === 429) return { ok: false, message: 'Demasiadas peticiones (429). Espera 1 minuto e intenta de nuevo.' };
+    if (!res.ok)            return { ok: false, message: `Error ${res.status}: ${res.statusText}` };
+    const data = await res.json();
+    const competitions = (data.competitions ?? []).map(c => c.code).join(', ');
+    return { ok: true, message: `Conexión exitosa. Competencias disponibles: ${competitions || 'WC, PL, BL1..'}` };
+  } catch (e) {
+    // Network / CORS error
+    return { ok: false, message: `Error de red: ${e.message}. Verifica tu conexión a internet.` };
   }
 }
 

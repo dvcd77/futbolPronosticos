@@ -1,4 +1,4 @@
-import { poissonRandom, mean, stdDev, poissonPmf } from './utils.js';
+import { poissonRandom, mean, stdDev } from './utils.js';
 
 const MAX_GOALS_TRACK = 9;
 

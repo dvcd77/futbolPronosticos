@@ -83,19 +83,26 @@ export default function ModelComparison() {
     }
   }
 
-  // Build radar chart data
+  // Build radar chart data — clamp all values to [0,100], no \n in labels
   const radarData = results ? [
-    { metric: `Local\n${homeTeam?.shortName ?? 'L'}` },
+    { metric: `${homeTeam?.tla ?? 'Local'} gana` },
     { metric: 'xG Local' },
     { metric: 'Over 2.5' },
     { metric: 'BTTS' },
-    { metric: `Visit.\n${awayTeam?.shortName ?? 'V'}` },
-    { metric: 'xG Visita' },
+    { metric: `${awayTeam?.tla ?? 'Visit.'} gana` },
+    { metric: 'xG Visit.' },
   ].map((d, i) => {
     const entry = { metric: d.metric };
     Object.entries(results).forEach(([id, m]) => {
-      const vals = [m.home, m.lambdaHome / 4, m.over?.['2.5'] ?? 0.5, m.btts ?? 0.5, m.away, m.lambdaAway / 4];
-      entry[id] = Math.round((vals[i] ?? 0.5) * 100);
+      const rawVals = [
+        m.home,
+        m.lambdaHome / 4,          // scale: 0–4.5 goals → 0–112%; clamp below
+        m.over?.['2.5'] ?? 0.5,
+        m.btts ?? 0.5,
+        m.away,
+        m.lambdaAway / 4,
+      ];
+      entry[id] = Math.min(100, Math.max(0, Math.round((rawVals[i] ?? 0.5) * 100)));
     });
     return entry;
   }) : [];
