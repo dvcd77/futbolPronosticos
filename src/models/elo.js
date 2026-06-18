@@ -111,3 +111,13 @@ export function eloPrediction(homeId, awayId, eloRatings) {
 export function getElo(teamId, ratings) {
   return Math.round(ratings.get(teamId) ?? DEFAULT_ELO);
 }
+
+/**
+ * Returns an attack/defense factor based on ELO rating.
+ * Used as fallback when a team has no match history.
+ * ELO 1500 (average) → 1.0, ELO 1800 → 1.5, ELO 1200 → 0.5
+ */
+export function eloStrengthFactor(teamId, eloRatings) {
+  const elo = (eloRatings instanceof Map ? eloRatings.get(teamId) : undefined) ?? DEFAULT_ELO;
+  return clamp(1 + (elo - DEFAULT_ELO) / 600, 0.40, 2.50);
+}

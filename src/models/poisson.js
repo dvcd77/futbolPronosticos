@@ -1,40 +1,44 @@
 import { poissonPmf, poissonCdf, dixonColes, clamp } from './utils.js';
+import { eloStrengthFactor } from './elo.js';
 
-const BASE_LAMBDA = 1.30; // Average goals per team in international football (WC)
-const MAX_GOALS = 9;
-const DC_RHO = -0.10;
+const BASE_LAMBDA = 1.30;
+const MAX_GOALS   = 9;
+const DC_RHO      = -0.10;
 
 /**
- * Compute attack/defense strength from match history for a given team.
- * Returns { attack, defense } relative to BASE_LAMBDA.
+ * Compute attack/defense strength from match history.
+ * Falls back to ELO-based estimate when no matches are available,
+ * so the model gives meaningful (non-identical) output without history.
  */
-export function teamStrengthFromMatches(matches, teamId) {
+export function teamStrengthFromMatches(matches, teamId, eloRatings = null) {
   const valid = matches.filter(m =>
     m.score?.fullTime?.home != null && m.score?.fullTime?.away != null &&
     m.status === 'FINISHED'
   );
-  if (valid.length === 0) return { attack: 1, defense: 1 };
+
+  if (valid.length === 0) {
+    // ELO fallback: above-average teams attack more and concede less
+    const f = eloStrengthFactor(teamId, eloRatings);
+    return { attack: f, defense: 1 / f, fromElo: true };
+  }
 
   let wScored = 0, wConceded = 0, wTotal = 0;
   valid.slice(-30).forEach((m, i, arr) => {
-    const w = Math.pow(0.92, arr.length - 1 - i); // exponential decay
+    const w = Math.pow(0.92, arr.length - 1 - i);
     const isHome = m.homeTeam?.id === teamId;
-    const scored = isHome ? m.score.fullTime.home : m.score.fullTime.away;
-    const conceded = isHome ? m.score.fullTime.away : m.score.fullTime.home;
-    wScored += scored * w;
-    wConceded += conceded * w;
-    wTotal += w;
+    wScored   += (isHome ? m.score.fullTime.home : m.score.fullTime.away) * w;
+    wConceded += (isHome ? m.score.fullTime.away : m.score.fullTime.home) * w;
+    wTotal    += w;
   });
 
   return {
-    attack: clamp((wScored / wTotal) / BASE_LAMBDA, 0.3, 4.0),
-    defense: clamp((wConceded / wTotal) / BASE_LAMBDA, 0.3, 4.0),
+    attack:  clamp((wScored   / wTotal) / BASE_LAMBDA, 0.30, 4.0),
+    defense: clamp((wConceded / wTotal) / BASE_LAMBDA, 0.30, 4.0),
+    fromElo: false,
+    matchCount: valid.length,
   };
 }
 
-/**
- * Expected goals for each team using Dixon-Coles bivariate Poisson.
- */
 export function expectedGoals(homeStr, awayStr) {
   return {
     lambdaHome: clamp(BASE_LAMBDA * homeStr.attack * awayStr.defense, 0.20, 6.0),
@@ -42,10 +46,6 @@ export function expectedGoals(homeStr, awayStr) {
   };
 }
 
-/**
- * Full probability distribution from expected goals.
- * Returns 1X2, most-likely scores, over/under, btts, half-time 1X2.
- */
 export function poissonPrediction(lambdaHome, lambdaAway) {
   let home = 0, draw = 0, away = 0;
   const scores = {};
@@ -54,8 +54,8 @@ export function poissonPrediction(lambdaHome, lambdaAway) {
   for (let h = 0; h <= MAX_GOALS; h++) {
     for (let a = 0; a <= MAX_GOALS; a++) {
       const raw = poissonPmf(h, lambdaHome) * poissonPmf(a, lambdaAway);
-      const dc = dixonColes(h, a, lambdaHome, lambdaAway, DC_RHO);
-      const p = Math.max(0, raw * dc);
+      const dc  = dixonColes(h, a, lambdaHome, lambdaAway, DC_RHO);
+      const p   = Math.max(0, raw * dc);
       scores[`${h}-${a}`] = p;
       scoreSum += p;
       if (h > a) home += p;
@@ -64,21 +64,16 @@ export function poissonPrediction(lambdaHome, lambdaAway) {
     }
   }
 
-  // Normalize
   const tot = home + draw + away;
   const normalScores = {};
   for (const [k, v] of Object.entries(scores)) normalScores[k] = v / scoreSum;
 
-  // Over/Under
   const totalLambda = lambdaHome + lambdaAway;
   const over15 = 1 - poissonCdf(1, totalLambda);
   const over25 = 1 - poissonCdf(2, totalLambda);
   const over35 = 1 - poissonCdf(3, totalLambda);
+  const btts   = (1 - poissonPmf(0, lambdaHome)) * (1 - poissonPmf(0, lambdaAway));
 
-  // BTTS (both teams to score)
-  const btts = (1 - poissonPmf(0, lambdaHome)) * (1 - poissonPmf(0, lambdaAway));
-
-  // Half-time: 42% of expected goals materialise in first half
   const htLH = lambdaHome * 0.42;
   const htLA = lambdaAway * 0.42;
   let htHome = 0, htDraw = 0, htAway = 0;
@@ -90,7 +85,6 @@ export function poissonPrediction(lambdaHome, lambdaAway) {
       else htAway += p;
     }
   }
-  // Normalize HT probabilities (truncation at 7 goals leaves tiny residual)
   const htTot = htHome + htDraw + htAway || 1;
 
   return {
@@ -98,10 +92,10 @@ export function poissonPrediction(lambdaHome, lambdaAway) {
     draw: draw / tot,
     away: away / tot,
     scores: normalScores,
-    over: { 1.5: over15, 2.5: over25, 3.5: over35 },
-    under: { 1.5: 1 - over15, 2.5: 1 - over25, 3.5: 1 - over35 },
+    over:  { 1.5: over15, 2.5: over25, 3.5: over35 },
+    under: { 1.5: 1-over15, 2.5: 1-over25, 3.5: 1-over35 },
     btts,
-    halfTime: { home: htHome / htTot, draw: htDraw / htTot, away: htAway / htTot },
+    halfTime: { home: htHome/htTot, draw: htDraw/htTot, away: htAway/htTot },
     lambdaHome,
     lambdaAway,
   };

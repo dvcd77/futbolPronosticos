@@ -86,33 +86,34 @@ export default function MatchPredictor() {
         loadTeamData(awayId),
       ]);
 
-      const hasData = homeMatches.length > 0 || awayMatches.length > 0;
+      const hasData = [
+        ...homeMatches.filter(m => m.status === 'FINISHED' && m.score?.fullTime?.home != null),
+        ...awayMatches.filter(m => m.status === 'FINISHED' && m.score?.fullTime?.home != null),
+      ].length > 0;
 
       // ── Build all model predictions ────────────────────────────────────────
       const models = {};
 
-      // Poisson (always available, uses match data when present)
-      const homeStr = teamStrengthFromMatches(homeMatches, homeId);
-      const awayStr = teamStrengthFromMatches(awayMatches, awayId);
-      const { lambdaHome: lH_p, lambdaAway: lA_p } = poissonEG(homeStr, awayStr);
-      models.poisson = poissonPrediction(lH_p, lA_p);
-
-      // ELO
+      // ── ELO first: used as quality fallback in ALL models below ───────────
       const eloR = eloRatings.size > 0
         ? eloRatings
         : buildEloRatings([...homeMatches, ...awayMatches]);
       models.elo = eloPrediction(homeId, awayId, eloR);
 
-      // Data-dependent models: only include when we have real match history.
-      // If no data, exclude them from the ensemble so ELO isn't implicitly
-      // given 4× weight via aliasing.
-      if (hasData) {
-        models.form = formPrediction(homeMatches, awayMatches, homeId, awayId);
-        models.xg   = xgPrediction(homeMatches, awayMatches, homeId, awayId, eloR);
-        models.ml   = mlPrediction(homeMatches, awayMatches, homeId, awayId, eloR);
-      }
+      // ── Poisson: multiplicative model, uses ELO when no match history ─────
+      const homeStr = teamStrengthFromMatches(homeMatches, homeId, eloR);
+      const awayStr = teamStrengthFromMatches(awayMatches, awayId, eloR);
+      const { lambdaHome: lH_p, lambdaAway: lA_p } = poissonEG(homeStr, awayStr);
+      models.poisson = poissonPrediction(lH_p, lA_p);
+
+      // ── Form, xG, ML: each uses ELO differently as fallback ───────────────
+      // Even without match history these now give DISTINCT probabilities.
+      models.form = formPrediction(homeMatches, awayMatches, homeId, awayId, eloR);
+      models.xg   = xgPrediction(homeMatches, awayMatches, homeId, awayId, eloR);
+      models.ml   = mlPrediction(homeMatches, awayMatches, homeId, awayId, eloR);
 
       // ── Ensemble (Monte Carlo on weighted-average lambdas) ─────────────────
+      // All 5 models are always populated (with ELO-fallback if no match data)
       const effWeights = weightsMode === 'auto'
         ? Object.fromEntries(MODEL_IDS.map(id => [id, 1 / MODEL_IDS.length]))
         : weights;
@@ -125,8 +126,7 @@ export default function MatchPredictor() {
         : runMonteCarlo(active.lambdaHome ?? lH_p, active.lambdaAway ?? lA_p, simCount);
 
       setAllModelResults(models);
-      setResult({ ...mcResult, model: activeModel, useStaticFallback: !hasData });
-    } catch (e) {
+      setResult({ ...mcResult, model: activeModel, useStaticFallback: !hasData });    } catch (e) {
       setError(e.message ?? 'Error al calcular el pronóstico.');
     } finally {
       setLoading(false);

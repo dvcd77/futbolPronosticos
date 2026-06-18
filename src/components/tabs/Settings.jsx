@@ -33,20 +33,33 @@ export default function Settings() {
     setLoadingData(true);
     setLoadLog(['Conectando con football-data.org...']);
 
+    // Build a TLA → { name (ES), conf } lookup from our curated list
+    const tlaMeta = {};
+    FALLBACK_TEAMS.forEach(t => { tlaMeta[t.tla] = { name: t.name, conf: t.conf }; });
+
     try {
       appendLog('📡 Cargando equipos del Mundial 2026...');
       const teamList = await fetchTeams('WC');
       if (teamList.length > 0) {
-        setTeams(teamList);
-        appendLog(`✅ ${teamList.length} equipos del Mundial 2026 cargados.`);
+        // Enrich API teams: add Spanish name + confederation from FALLBACK_TEAMS by TLA
+        const enriched = teamList.map(t => {
+          const meta = tlaMeta[t.tla] ?? tlaMeta[t.shortName];
+          return {
+            ...t,
+            name: meta?.name ?? t.name,       // Spanish name (falls back to English)
+            conf: meta?.conf ?? 'Otros',       // Confederation (required for grouping)
+          };
+        });
+        setTeams(enriched);
+        appendLog(`✅ ${enriched.length} equipos del Mundial 2026 cargados.`);
       } else {
         setTeams(FALLBACK_TEAMS);
-        appendLog('ℹ️ Usando lista de equipos predeterminada (48 equipos).');
+        appendLog('ℹ️ Sin equipos en la API (posiblemente temporada aún no disponible). Usando lista predeterminada.');
       }
     } catch (e) {
       setTeams(FALLBACK_TEAMS);
       appendLog(`⚠️ No se pudieron cargar equipos: ${e.message}`);
-      appendLog('ℹ️ Usando equipos predeterminados.');
+      appendLog('ℹ️ Usando equipos predeterminados (48 equipos).');
     }
 
     try {
@@ -56,8 +69,29 @@ export default function Settings() {
         const elo = buildEloRatings(matches);
         setEloRatings(elo);
         appendLog(`✅ ${matches.length} partidos cargados. ELO calculado para ${elo.size} equipos.`);
+
+        // Populate teamMatchCache with WC matches grouped by team.
+        // This gives Poisson / Form / xG / ML real data without extra API calls.
+        const byTeam = {};
+        matches.forEach(m => {
+          [m.homeTeam?.id, m.awayTeam?.id].filter(Boolean).forEach(tid => {
+            if (!byTeam[tid]) byTeam[tid] = [];
+            byTeam[tid].push(m);
+          });
+        });
+        setTeamMatchCache(prev => {
+          const next = { ...prev };
+          // Only seed if team doesn't have a full history cached already
+          Object.entries(byTeam).forEach(([tid, ms]) => {
+            const id = Number(tid);
+            if (!next[id] || next[id].length < ms.length) next[id] = ms;
+          });
+          return next;
+        });
+        const teamsWithMatches = Object.keys(byTeam).length;
+        appendLog(`📊 Historial WC pre-cargado para ${teamsWithMatches} equipos (modelos usarán datos reales).`);
       } else {
-        appendLog('ℹ️ Sin partidos WC 2026 todavía (o sin acceso en tu plan).');
+        appendLog('ℹ️ Sin partidos WC 2026 disponibles en este momento. Los modelos usarán ratings ELO base.');
       }
     } catch (e) {
       appendLog(`⚠️ Partidos WC: ${e.message}`);

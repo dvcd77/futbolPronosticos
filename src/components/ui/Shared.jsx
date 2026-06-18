@@ -50,36 +50,57 @@ export function ProbBar({ label, value, std, color, showPct = true, height = 8 }
   );
 }
 
-// ── Team selector dropdown with confederation grouping ────────────────────────
-export function TeamSelector({ teams, value, onChange, label, excludeId }) {
-  const available = teams.filter(t => t.id !== excludeId);
+// ── Team selector dropdown ────────────────────────────────────────────────────
+const CONF_ORDER = ['UEFA', 'CONMEBOL', 'CONCACAF', 'AFC', 'CAF', 'OFC'];
+const CONF_LABEL = {
+  UEFA: '🇪🇺 UEFA', CONMEBOL: '🌎 CONMEBOL', CONCACAF: '🌎 CONCACAF',
+  AFC: '🌏 AFC', CAF: '🌍 CAF', OFC: '🌊 OFC',
+};
 
-  // Group by confederation
-  const confOrder = ['UEFA', 'CONMEBOL', 'CONCACAF', 'AFC', 'CAF', 'OFC'];
-  const confLabel = {
-    UEFA: '🇪🇺 UEFA', CONMEBOL: '🌎 CONMEBOL', CONCACAF: '🌎 CONCACAF',
-    AFC: '🌏 AFC', CAF: '🌍 CAF', OFC: '🌊 OFC',
-  };
-  const grouped = {};
-  available.forEach(t => {
-    const c = t.conf ?? 'Otros';
-    if (!grouped[c]) grouped[c] = [];
-    grouped[c].push(t);
-  });
+export function TeamSelector({ teams, value, onChange, label, excludeId }) {
+  const available = teams
+    .filter(t => t.id !== excludeId)
+    .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', 'es'));
+
+  // Detect if teams have confederation info (FALLBACK_TEAMS) or not (API teams)
+  const hasConf = available.some(t => t.conf && CONF_ORDER.includes(t.conf));
+
+  // Build confederation groups (only when conf data is present)
+  const groups = {};
+  if (hasConf) {
+    available.forEach(t => {
+      const c = t.conf;
+      if (c && CONF_ORDER.includes(c)) {
+        if (!groups[c]) groups[c] = [];
+        groups[c].push(t);
+      }
+    });
+  }
 
   return (
     <div>
       <div className="label-sm mb-2">{label}</div>
       <div style={{ position: 'relative' }}>
-        <select value={value ?? ''} onChange={e => onChange(e.target.value ? Number(e.target.value) : null)}>
+        <select
+          value={value ?? ''}
+          onChange={e => onChange(e.target.value ? Number(e.target.value) : null)}
+        >
           <option value="">— Seleccionar equipo —</option>
-          {confOrder.filter(c => grouped[c]).map(conf => (
-            <optgroup key={conf} label={confLabel[conf] ?? conf}>
-              {grouped[conf].sort((a, b) => a.name.localeCompare(b.name, 'es')).map(t => (
+
+          {hasConf
+            /* Grouped by confederation (FALLBACK_TEAMS or enriched API teams) */
+            ? CONF_ORDER.filter(c => groups[c]?.length).map(conf => (
+                <optgroup key={conf} label={CONF_LABEL[conf]}>
+                  {groups[conf].map(t => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
+                  ))}
+                </optgroup>
+              ))
+            /* Flat alphabetical list (raw API teams without conf) */
+            : available.map(t => (
                 <option key={t.id} value={t.id}>{t.name}</option>
-              ))}
-            </optgroup>
-          ))}
+              ))
+          }
         </select>
         <div style={{
           position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)',
