@@ -317,19 +317,68 @@ export default function MatchPredictor() {
                   </div>
                 </div>
 
-                {/* Over/Under + HT */}
+                {/* Over/Under + BTTS + HT */}
                 <div className="card">
-                  <SectionTitle>Goles totales</SectionTitle>
-                  {[
-                    { label: 'Más de 1.5', val: result.over?.['1.5'], std: result.overStd?.['1.5'], color: '#3FB950' },
-                    { label: 'Más de 2.5', val: result.over?.['2.5'], std: result.overStd?.['2.5'], color: '#3FB950' },
-                    { label: 'Más de 3.5', val: result.over?.['3.5'], std: result.overStd?.['3.5'], color: '#3FB950' },
-                    { label: 'Ambos anotan', val: result.btts,          std: result.bttsStd,          color: '#BC8CFF' },
-                  ].map(({ label, val, std, color }) => val != null && (
-                    <ProbBar key={label} label={label} value={val} std={std} color={color} height={6} />
-                  ))}
+                  <SectionTitle>Totales de goles</SectionTitle>
 
-                  <div style={{ borderTop: '1px solid #162844', marginTop: 12, paddingTop: 12 }}>
+                  {/* Column headers */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '56px 1fr 1fr', gap: 6, marginBottom: 10 }}>
+                    <div />
+                    <div className="label-sm" style={{ textAlign: 'center', color: '#3FB950' }}>
+                      MÁS DE (Over)
+                    </div>
+                    <div className="label-sm" style={{ textAlign: 'center', color: '#F5A623' }}>
+                      MENOS DE (Under)
+                    </div>
+                  </div>
+
+                  {/* Over / Under rows */}
+                  {['1.5', '2.5', '3.5'].map(t => {
+                    const over  = result.over?.[t];
+                    const under = result.under?.[t];
+                    const std   = result.overStd?.[t]; // under std = same (under = 1-over)
+                    if (over == null) return null;
+                    return (
+                      <div key={t} style={{ display: 'grid', gridTemplateColumns: '56px 1fr 1fr', gap: 6, marginBottom: 12 }}>
+                        {/* Line label */}
+                        <div style={{ fontFamily: 'monospace', fontSize: 12, color: '#5a7a9a', paddingTop: 4, fontWeight: 600 }}>
+                          {t}
+                        </div>
+                        {/* Over bar */}
+                        <div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3, alignItems: 'center' }}>
+                            <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#3FB950', fontSize: 13 }}>
+                              {(over * 100).toFixed(1)}%
+                            </span>
+                            {std != null && <span className="std-badge">±{(std * 100).toFixed(1)}%</span>}
+                          </div>
+                          <div style={{ background: '#162844', borderRadius: 4, height: 7, overflow: 'hidden' }}>
+                            <div style={{ width: `${over * 100}%`, height: '100%', borderRadius: 4, background: '#3FB950', transition: 'width .7s' }} />
+                          </div>
+                        </div>
+                        {/* Under bar */}
+                        <div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3, alignItems: 'center' }}>
+                            <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#F5A623', fontSize: 13 }}>
+                              {(under * 100).toFixed(1)}%
+                            </span>
+                            {std != null && <span className="std-badge">±{(std * 100).toFixed(1)}%</span>}
+                          </div>
+                          <div style={{ background: '#162844', borderRadius: 4, height: 7, overflow: 'hidden' }}>
+                            <div style={{ width: `${under * 100}%`, height: '100%', borderRadius: 4, background: '#F5A623', transition: 'width .7s' }} />
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {/* BTTS */}
+                  <div style={{ borderTop: '1px solid #162844', marginTop: 4, paddingTop: 12 }}>
+                    <ProbBar label="Ambos anotan (BTTS)" value={result.btts} std={result.bttsStd} color="#BC8CFF" height={6} />
+                  </div>
+
+                  {/* Half-time */}
+                  <div style={{ borderTop: '1px solid #162844', marginTop: 8, paddingTop: 12 }}>
                     <div className="label-sm" style={{ marginBottom: 8 }}>Medio tiempo</div>
                     {[
                       { label: homeTeam?.tla ?? 'L', val: result.halfTime?.home, std: result.halfTimeStd?.home, color: '#00D4AA' },

@@ -139,6 +139,13 @@ export async function fetchStandings(competitionCode = 'WC') {
   return data.standings ?? [];
 }
 
+/** Get squad (player list) for a team */
+export async function fetchTeamSquad(teamId) {
+  const url = `${BASE_URL}/teams/${teamId}`;
+  const data = await fetchCached(url, TTL.teams);
+  return data.squad ?? [];
+}
+
 /** Get top scorers for a competition */
 export async function fetchScorers(competitionCode = 'WC', limit = 50) {
   const url = `${BASE_URL}/competitions/${competitionCode}/scorers?limit=${limit}`;
