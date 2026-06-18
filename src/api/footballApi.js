@@ -1,4 +1,4 @@
-const BASE_URL = 'https://api.football-data.org/v4';
+const BASE_URL = '/api/football';    // → proxy en el mismo servidor (sin CORS)
 const RATE_INTERVAL = 6200;   // ms between requests (10/min = 1/6s + buffer)
 const CACHE_PREFIX = 'fdapi_';
 

@@ -1,15 +1,16 @@
 {
   "name": "wc2026-predictor",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "lint": "eslint .",
+    "start": "node server.js",
     "preview": "vite preview"
   },
   "dependencies": {
+    "express": "^4.21.2",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "recharts": "^3.8.1"
