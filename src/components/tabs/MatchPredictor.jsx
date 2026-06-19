@@ -8,14 +8,23 @@ import { buildEloRatings, eloPrediction } from '../../models/elo.js';
 import { formPrediction } from '../../models/form.js';
 import { xgPrediction } from '../../models/xg.js';
 import { mlPrediction } from '../../models/ml.js';
+import { fifaRankPrediction } from '../../models/fifaRank.js';
 import { ensemblePrediction, MODEL_IDS, MODEL_LABELS } from '../../models/ensemble.js';
 import { runMonteCarlo } from '../../models/monteCarlo.js';
 import { fetchTeamMatches, hasApiKey } from '../../api/footballApi.js';
+import {
+  hasApiFootballKey, findApiFootballTeamId, fetchTeamFixtures,
+  normalizeApiFootballFixture, buildNameToTeamMap,
+} from '../../api/apiFootball.js';
+import {
+  hasOddsApiKey, fetchWorldCupOdds, matchOddsToTeams,
+  averageH2HOdds, averageTotalsOdds, impliedProbabilities,
+} from '../../api/oddsApi.js';
 import { BarChart, Bar, XAxis, YAxis, Cell, Tooltip, ResponsiveContainer } from 'recharts';
 
 const MODEL_COLORS = {
   poisson: '#00D4AA', elo: '#7AACCC', form: '#F5A623',
-  xg: '#BC8CFF', ml: '#3FB950', ensemble: '#F85149',
+  xg: '#BC8CFF', ml: '#3FB950', fifa: '#FFD700', ensemble: '#F85149',
 };
 
 // Defined outside the component so it is never recreated on each render
@@ -30,36 +39,273 @@ function ProbTooltip({ active, payload }) {
   );
 }
 
-function useTeamData() {
+/**
+ * Compares model probability vs bookmaker implied probability (vig-removed).
+ * "Edge" = model_prob − market_prob. Positive edge = model thinks it's more
+ * likely than the market is pricing in (potential value, per the model).
+ */
+function EdgeBadge({ edge }) {
+  if (edge == null) return null;
+  const pct = (edge * 100).toFixed(1);
+  const positive = edge > 0.015;   // >1.5pp = notable edge
+  const negative = edge < -0.015;
+  const color = positive ? '#3FB950' : negative ? '#F85149' : '#5a7a9a';
+  const sign = edge > 0 ? '+' : '';
+  return (
+    <span style={{
+      fontSize: 10, fontFamily: 'monospace', fontWeight: 700, color,
+      background: positive ? '#0d2e1e' : negative ? '#2e0d0d' : 'transparent',
+      padding: positive || negative ? '1px 5px' : 0, borderRadius: 4,
+    }}>
+      {sign}{pct}pp
+    </span>
+  );
+}
+
+function OddsComparison({ homeTeam, awayTeam, result }) {
+  const [oddsState, setOddsState] = useState({ status: 'idle' }); // idle | loading | found | not_found | error
+
+  async function loadOdds() {
+    setOddsState({ status: 'loading' });
+    try {
+      const events = await fetchWorldCupOdds();
+      const event = matchOddsToTeams(events, homeTeam, awayTeam);
+      if (!event) {
+        setOddsState({ status: 'not_found' });
+        return;
+      }
+      const h2h = averageH2HOdds(event);
+      const totals25 = averageTotalsOdds(event, 2.5);
+      if (!h2h) {
+        setOddsState({ status: 'not_found' });
+        return;
+      }
+      const implied = impliedProbabilities(h2h);
+      setOddsState({ status: 'found', h2h, totals25, implied, bookmakerCount: h2h.bookmakerCount });
+    } catch (e) {
+      setOddsState({ status: 'error', message: e.message });
+    }
+  }
+
+  if (!hasOddsApiKey()) {
+    return (
+      <div className="card">
+        <SectionTitle sub="Compara tus pronósticos contra el mercado real de apuestas">
+          🎰 Cuotas de casas de apuestas
+        </SectionTitle>
+        <div style={{ fontSize: 13, color: '#5a7a9a', textAlign: 'center', padding: '12px 0' }}>
+          💡 Agrega tu API key gratuita de The Odds API en ⚙️ Configuración para comparar tus pronósticos contra cuotas reales del mercado.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card">
+      <SectionTitle sub="Probabilidad implícita del mercado (cuotas promedio, margen de casa removido) vs tu modelo">
+        🎰 Cuotas de casas de apuestas
+      </SectionTitle>
+
+      {oddsState.status === 'idle' && (
+        <button className="btn-secondary" onClick={loadOdds} style={{ width: '100%', justifyContent: 'center' }}>
+          📡 Buscar cuotas para este partido
+        </button>
+      )}
+
+      {oddsState.status === 'loading' && (
+        <div style={{ textAlign: 'center', padding: '12px 0' }}>
+          <Spinner size={18} />
+          <div style={{ fontSize: 12, color: '#5a7a9a', marginTop: 8 }}>Consultando casas de apuestas...</div>
+        </div>
+      )}
+
+      {oddsState.status === 'not_found' && (
+        <InfoBox message="No se encontraron cuotas para este partido. Los mercados suelen abrir pocos días antes del encuentro." />
+      )}
+
+      {oddsState.status === 'error' && (
+        <ErrorBox message={oddsState.message} />
+      )}
+
+      {oddsState.status === 'found' && (
+        <div>
+          <div style={{ fontSize: 11, color: '#3a5070', marginBottom: 14 }}>
+            Promedio de {oddsState.bookmakerCount} casa{oddsState.bookmakerCount !== 1 ? 's' : ''} de apuestas · Margen de casa: {oddsState.implied.vigPercent.toFixed(1)}%
+          </div>
+
+          {/* 1X2 comparison table */}
+          <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr 1fr 1fr', gap: 8, marginBottom: 6 }}>
+            <div />
+            <div className="label-sm" style={{ textAlign: 'center', fontSize: 9 }}>{homeTeam?.tla ?? 'L'}</div>
+            <div className="label-sm" style={{ textAlign: 'center', fontSize: 9 }}>X</div>
+            <div className="label-sm" style={{ textAlign: 'center', fontSize: 9 }}>{awayTeam?.tla ?? 'V'}</div>
+          </div>
+
+          {/* Bookmaker odds row */}
+          <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr 1fr 1fr', gap: 8, marginBottom: 4, alignItems: 'center' }}>
+            <div style={{ fontSize: 11, color: '#5a7a9a' }}>Cuota</div>
+            {[oddsState.h2h.home, oddsState.h2h.draw, oddsState.h2h.away].map((odd, i) => (
+              <div key={i} style={{ textAlign: 'center', fontFamily: 'monospace', fontSize: 14, fontWeight: 700, color: '#D8E6F3' }}>
+                {odd != null ? odd.toFixed(2) : '—'}
+              </div>
+            ))}
+          </div>
+
+          {/* Implied probability row */}
+          <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr 1fr 1fr', gap: 8, marginBottom: 4, alignItems: 'center' }}>
+            <div style={{ fontSize: 11, color: '#5a7a9a' }}>Mercado</div>
+            {[oddsState.implied.home, oddsState.implied.draw, oddsState.implied.away].map((p, i) => (
+              <div key={i} style={{ textAlign: 'center', fontFamily: 'monospace', fontSize: 13, color: '#7AACCC' }}>
+                {(p * 100).toFixed(1)}%
+              </div>
+            ))}
+          </div>
+
+          {/* Model probability row */}
+          <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr 1fr 1fr', gap: 8, marginBottom: 4, alignItems: 'center' }}>
+            <div style={{ fontSize: 11, color: '#5a7a9a' }}>Modelo</div>
+            {[result.home, result.draw, result.away].map((p, i) => (
+              <div key={i} style={{ textAlign: 'center', fontFamily: 'monospace', fontSize: 13, fontWeight: 700, color: MODEL_COLORS[result.model] ?? '#F85149' }}>
+                {(p * 100).toFixed(1)}%
+              </div>
+            ))}
+          </div>
+
+          {/* Edge row */}
+          <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr 1fr 1fr', gap: 8, marginBottom: 14, alignItems: 'center' }}>
+            <div style={{ fontSize: 11, color: '#5a7a9a' }}>Diferencia</div>
+            {[
+              result.home - oddsState.implied.home,
+              result.draw - oddsState.implied.draw,
+              result.away - oddsState.implied.away,
+            ].map((edge, i) => (
+              <div key={i} style={{ textAlign: 'center' }}><EdgeBadge edge={edge} /></div>
+            ))}
+          </div>
+
+          {/* Totals 2.5 comparison (if available) */}
+          {oddsState.totals25 && (
+            <div style={{ borderTop: '1px solid #162844', paddingTop: 12 }}>
+              <div className="label-sm" style={{ marginBottom: 8 }}>Total de goles · Línea 2.5</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr 1fr', gap: 8, marginBottom: 4 }}>
+                <div />
+                <div className="label-sm" style={{ textAlign: 'center', fontSize: 9, color: '#3FB950' }}>Más de</div>
+                <div className="label-sm" style={{ textAlign: 'center', fontSize: 9, color: '#F5A623' }}>Menos de</div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr 1fr', gap: 8, marginBottom: 4 }}>
+                <div style={{ fontSize: 11, color: '#5a7a9a' }}>Cuota</div>
+                <div style={{ textAlign: 'center', fontFamily: 'monospace', fontWeight: 700 }}>{oddsState.totals25.over.toFixed(2)}</div>
+                <div style={{ textAlign: 'center', fontFamily: 'monospace', fontWeight: 700 }}>{oddsState.totals25.under.toFixed(2)}</div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr 1fr', gap: 8, marginBottom: 4 }}>
+                <div style={{ fontSize: 11, color: '#5a7a9a' }}>Mercado</div>
+                <div style={{ textAlign: 'center', fontFamily: 'monospace', fontSize: 12, color: '#7AACCC' }}>
+                  {((1 / oddsState.totals25.over) / (1/oddsState.totals25.over + 1/oddsState.totals25.under) * 100).toFixed(1)}%
+                </div>
+                <div style={{ textAlign: 'center', fontFamily: 'monospace', fontSize: 12, color: '#7AACCC' }}>
+                  {((1 / oddsState.totals25.under) / (1/oddsState.totals25.over + 1/oddsState.totals25.under) * 100).toFixed(1)}%
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr 1fr', gap: 8 }}>
+                <div style={{ fontSize: 11, color: '#5a7a9a' }}>Modelo</div>
+                <div style={{ textAlign: 'center', fontFamily: 'monospace', fontSize: 12, fontWeight: 700, color: '#3FB950' }}>
+                  {result.over?.['2.5'] != null ? (result.over['2.5']*100).toFixed(1)+'%' : '—'}
+                </div>
+                <div style={{ textAlign: 'center', fontFamily: 'monospace', fontSize: 12, fontWeight: 700, color: '#F5A623' }}>
+                  {result.under?.['2.5'] != null ? (result.under['2.5']*100).toFixed(1)+'%' : '—'}
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div style={{ fontSize: 10, color: '#3a5070', marginTop: 14, lineHeight: 1.6 }}>
+            "Diferencia" verde = el modelo ve más probabilidad de la que paga el mercado.
+            Esto es solo informativo — no es una recomendación de apuesta.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function useTeamData(displayTeams) {
   const { teamMatchCache, setTeamMatchCache, setEloRatings, setApiStatus } = useApp();
 
   const loadTeamData = useCallback(async (teamId) => {
     if (teamMatchCache[teamId]) return teamMatchCache[teamId];
-    if (!hasApiKey()) return [];
-    try {
-      const matches = await fetchTeamMatches(teamId);
-      setTeamMatchCache(prev => {
-        const next = { ...prev, [teamId]: matches };
-        // Rebuild ELO with all cached matches including the newly loaded ones
-        const allMatches = Object.values(next).flat();
-        setEloRatings(buildEloRatings(allMatches));
-        return next;
-      });
-      setApiStatus(prev => ({ ...prev, ok: true }));
-      return matches;
-    } catch {
-      setApiStatus(prev => ({ ...prev, ok: false }));
-      return [];
+    if (!hasApiKey() && !hasApiFootballKey()) return [];
+
+    let matches = [];
+    if (hasApiKey()) {
+      try {
+        matches = await fetchTeamMatches(teamId);
+        setApiStatus(prev => ({ ...prev, ok: true }));
+      } catch {
+        setApiStatus(prev => ({ ...prev, ok: false }));
+      }
     }
-  }, [teamMatchCache, setTeamMatchCache, setEloRatings, setApiStatus]);
+
+    // ── Enrich with API-Football (AFCON, Copa América, Gold Cup, clasificatorias) ──
+    // football-data.org no cubre estas competencias en su tier gratuito; las
+    // sumamos aquí si el usuario configuró su key de API-Football.
+    if (hasApiFootballKey()) {
+      const team = displayTeams.find(t => t.id === teamId);
+      if (team) {
+        try {
+          const afTeamId = await findApiFootballTeamId(team.name);
+          if (afTeamId) {
+            const fixtures = await fetchTeamFixtures(afTeamId, 25);
+            const nameToTeam = buildNameToTeamMap(displayTeams);
+            const afMatches = fixtures
+              .map(fx => normalizeApiFootballFixture(fx, nameToTeam))
+              .filter(Boolean);
+
+            // Dedupe: misma fecha (±1 día) + mismos dos equipos + mismo marcador
+            // evita contar dos veces un partido que esté en AMBAS fuentes (p.ej. WC)
+            const seen = new Set(matches.map(m => dedupeKey(m)));
+            const newOnes = afMatches.filter(m => {
+              const key = dedupeKey(m);
+              if (seen.has(key)) return false;
+              seen.add(key);
+              return true;
+            });
+
+            matches = [...matches, ...newOnes].sort(
+              (a, b) => new Date(a.utcDate) - new Date(b.utcDate)
+            );
+          }
+        } catch (e) {
+          console.warn('API-Football enrichment failed:', e.message);
+          // No crítico — seguimos con los datos de football-data.org solamente
+        }
+      }
+    }
+
+    setTeamMatchCache(prev => {
+      const next = { ...prev, [teamId]: matches };
+      const allMatches = Object.values(next).flat();
+      setEloRatings(buildEloRatings(allMatches));
+      return next;
+    });
+    return matches;
+  }, [teamMatchCache, setTeamMatchCache, setEloRatings, setApiStatus, displayTeams]);
 
   return { loadTeamData };
+}
+
+function dedupeKey(m) {
+  const date = (m.utcDate ?? '').slice(0, 10); // solo fecha, sin hora
+  const h = String(m.homeTeam?.id ?? '');
+  const a = String(m.awayTeam?.id ?? '');
+  const teams = [h, a].sort().join('-');
+  const score = `${m.score?.fullTime?.home ?? '?'}-${m.score?.fullTime?.away ?? '?'}`;
+  return `${date}_${teams}_${score}`;
 }
 
 export default function MatchPredictor() {
   const { teams, weights, setWeights, simCount, setSimCount, addToHistory, eloRatings } = useApp();
   const displayTeams = teams.length > 0 ? teams : FALLBACK_TEAMS;
-  const { loadTeamData } = useTeamData();
+  const { loadTeamData } = useTeamData(displayTeams);
 
   const [homeId, setHomeId]         = useState(null);
   const [awayId, setAwayId]         = useState(null);
@@ -69,6 +315,7 @@ export default function MatchPredictor() {
   const [error, setError]           = useState('');
   const [result, setResult]         = useState(null);
   const [allModelResults, setAllModelResults] = useState(null);
+  const [dataQuality, setDataQuality] = useState(null);
   const [showWeights, setShowWeights] = useState(false);
   const [saved, setSaved]           = useState(false);
 
@@ -78,7 +325,7 @@ export default function MatchPredictor() {
   async function runPrediction() {
     if (!homeId || !awayId)       { setError('Selecciona ambos equipos.'); return; }
     if (homeId === awayId)        { setError('Los equipos no pueden ser el mismo.'); return; }
-    setError(''); setLoading(true); setResult(null); setSaved(false);
+    setError(''); setLoading(true); setResult(null); setSaved(false); setDataQuality(null);
 
     try {
       const [homeMatches, awayMatches] = await Promise.all([
@@ -111,6 +358,34 @@ export default function MatchPredictor() {
       models.form = formPrediction(homeMatches, awayMatches, homeId, awayId, eloR);
       models.xg   = xgPrediction(homeMatches, awayMatches, homeId, awayId, eloR);
       models.ml   = mlPrediction(homeMatches, awayMatches, homeId, awayId, eloR);
+
+      // ── FIFA Ranking: independent of match-data availability. FIFA computes
+      // this with ALL official matches (including AFCON, Copa América, Gold
+      // Cup), so it's a valuable signal even when our match-history API
+      // doesn't cover the competition where a team was actually dominant.
+      if (homeTeam?.tla && awayTeam?.tla) {
+        models.fifa = fifaRankPrediction(homeTeam.tla, awayTeam.tla);
+      }
+
+      // ── Data quality snapshot: lets the user verify WHY a prediction looks
+      // a certain way. The free football-data.org tier doesn't cover every
+      // competition (e.g. AFCON, Copa América, Gold Cup), so a team that was
+      // dominant in an uncovered tournament can show 0 real matches here while
+      // the model silently falls back to ELO/base estimates instead.
+      setDataQuality({
+        home: {
+          matchCount: homeStr.matchCount ?? 0,
+          fromElo:    homeStr.fromElo,
+          elo:        models.elo.eloHome,
+          afCount:    homeMatches.filter(m => m.source === 'api-football').length,
+        },
+        away: {
+          matchCount: awayStr.matchCount ?? 0,
+          fromElo:    awayStr.fromElo,
+          elo:        models.elo.eloAway,
+          afCount:    awayMatches.filter(m => m.source === 'api-football').length,
+        },
+      });
 
       // ── Ensemble (Monte Carlo on weighted-average lambdas) ─────────────────
       // All 5 models are always populated (with ELO-fallback if no match data)
@@ -283,7 +558,52 @@ export default function MatchPredictor() {
                 </div>
               </div>
 
-              {/* 1X2 + Over/Under row */}
+              {/* Data quality panel — shows WHY a prediction looks the way it does */}
+              {dataQuality && (
+                <div className="card" style={{
+                  padding: '14px 18px',
+                  borderColor: (dataQuality.home.fromElo || dataQuality.away.fromElo) ? '#3a2a10' : '#1C3254',
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                    <div className="label-sm">🔍 Calidad de datos usados</div>
+                    {(dataQuality.home.fromElo || dataQuality.away.fromElo) && (
+                      <span style={{ fontSize: 10, color: '#F5A623', fontWeight: 600 }}>
+                        ⚠️ Fallback a ELO detectado
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                    {[
+                      { team: homeTeam, dq: dataQuality.home, color: '#00D4AA' },
+                      { team: awayTeam, dq: dataQuality.away, color: '#F5A623' },
+                    ].map(({ team, dq, color }) => (
+                      <div key={team?.id} style={{ fontSize: 12 }}>
+                        <span style={{ color, fontWeight: 600 }}>{team?.name}</span>
+                        {dq.fromElo ? (
+                          <div style={{ color: '#F5A623', marginTop: 3 }}>
+                            ⚠️ 0 partidos reales encontrados · usando solo ELO ({dq.elo})
+                          </div>
+                        ) : (
+                          <div style={{ color: '#5a7a9a', marginTop: 3 }}>
+                            ✅ {dq.matchCount} partido{dq.matchCount !== 1 ? 's' : ''} reales · ELO {dq.elo}
+                            {dq.afCount > 0 && (
+                              <span style={{ color: '#FFD700' }}> · {dq.afCount} vía API-Football</span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  {(dataQuality.home.fromElo || dataQuality.away.fromElo) && (
+                    <div style={{ fontSize: 11, color: '#5a7a9a', marginTop: 10, lineHeight: 1.6, borderTop: '1px solid #162844', paddingTop: 10 }}>
+                      El tier gratuito de football-data.org no cubre todas las competencias (p. ej. <strong style={{ color: '#7AACCC' }}>Copa Africana de Naciones, Copa América, Gold Cup</strong>).
+                      Si un equipo fue dominante en un torneo no cubierto, esa forma reciente <strong>no llega al modelo</strong> y la predicción se apoya solo en ELO histórico.
+                    </div>
+                  )}
+                </div>
+              )}
+
+
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
 
                 {/* 1X2 */}
@@ -475,6 +795,9 @@ export default function MatchPredictor() {
                   </div>
                 </div>
               )}
+
+              {/* Bookmaker odds comparison */}
+              <OddsComparison homeTeam={homeTeam} awayTeam={awayTeam} result={result} />
 
               {/* Quick model switcher */}
               {allModelResults && (

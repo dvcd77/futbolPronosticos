@@ -6,6 +6,7 @@ const MODEL_COLORS = {
   form:    '#F5A623',
   xg:      '#BC8CFF',
   ml:      '#3FB950',
+  fifa:    '#FFD700',
 };
 
 export default function ModelWeights({ weights, onChange, mode, onModeChange }) {

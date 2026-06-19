@@ -1,22 +1,28 @@
 import { mean } from './utils.js';
 import { runMonteCarlo } from './monteCarlo.js';
 
-export const MODEL_IDS = ['poisson', 'elo', 'form', 'xg', 'ml'];
+export const MODEL_IDS = ['poisson', 'elo', 'form', 'xg', 'ml', 'fifa'];
 export const MODEL_LABELS = {
   poisson: 'Poisson',
   elo:     'ELO',
   form:    'Forma',
   xg:      'xG Aprox',
   ml:      'ML Ligero',
+  fifa:    'Ranking FIFA',
   ensemble:'Ensemble',
 };
 
+// Pesos rebalanceados para incluir Ranking FIFA. Este modelo no depende de
+// qué competencias cubre la API de partidos (FIFA computa su ranking con
+// TODOS los partidos oficiales, incluyendo AFCON, Copa América, Gold Cup),
+// así que actúa como contrapeso cuando el historial de partidos es escaso.
 export const DEFAULT_WEIGHTS = {
-  poisson: 0.25,
-  elo:     0.20,
-  form:    0.25,
-  xg:      0.20,
+  poisson: 0.20,
+  elo:     0.15,
+  form:    0.20,
+  xg:      0.15,
   ml:      0.10,
+  fifa:    0.20,
 };
 
 /**

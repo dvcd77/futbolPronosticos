@@ -13,6 +13,18 @@ export default defineConfig({
         rewrite: path => path.replace(/^\/api\/football/, ''),
         secure: true,
       },
+      '/api/odds': {
+        target: 'https://api.the-odds-api.com/v4',
+        changeOrigin: true,
+        rewrite: path => path.replace(/^\/api\/odds/, ''),
+        secure: true,
+      },
+      '/api/apifootball': {
+        target: 'https://v3.football.api-sports.io',
+        changeOrigin: true,
+        rewrite: path => path.replace(/^\/api\/apifootball/, ''),
+        secure: true,
+      },
     },
   },
 })

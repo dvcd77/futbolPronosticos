@@ -6,11 +6,12 @@ import { buildEloRatings, eloPrediction } from '../../models/elo.js';
 import { formPrediction } from '../../models/form.js';
 import { xgPrediction } from '../../models/xg.js';
 import { mlPrediction } from '../../models/ml.js';
+import { fifaRankPrediction } from '../../models/fifaRank.js';
 import { ensemblePrediction, MODEL_IDS, MODEL_LABELS, DEFAULT_WEIGHTS } from '../../models/ensemble.js';
 import { fetchTeamMatches, hasApiKey } from '../../api/footballApi.js';
 import { RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, Tooltip } from 'recharts';
 
-const MODEL_COLORS = { poisson:'#00D4AA', elo:'#7AACCC', form:'#F5A623', xg:'#BC8CFF', ml:'#3FB950', ensemble:'#F85149' };
+const MODEL_COLORS = { poisson:'#00D4AA', elo:'#7AACCC', form:'#F5A623', xg:'#BC8CFF', ml:'#3FB950', fifa:'#FFD700', ensemble:'#F85149' };
 
 function PctCell({ value, color }) {
   if (value == null) return <td style={{ padding: '8px 12px', color: '#3a5070', textAlign: 'center' }}>—</td>;
@@ -59,20 +60,24 @@ export default function ModelComparison() {
       const [hm, am] = await Promise.all([loadMatches(homeId), loadMatches(awayId)]);
       setApiStatus(prev => ({ ...prev, ok: hasApiKey() }));
 
-      const homeStr = teamStrengthFromMatches(hm, homeId);
-      const awayStr = teamStrengthFromMatches(am, awayId);
-      const { lambdaHome: lH, lambdaAway: lA } = expectedGoals(homeStr, awayStr);
-
+      // ELO computed first so all models can use it as a fallback signal
       const eloR = eloRatings.size > 0 ? eloRatings : buildEloRatings([...hm, ...am]);
       if (eloRatings.size === 0) setEloRatings(eloR);
+
+      const homeStr = teamStrengthFromMatches(hm, homeId, eloR);
+      const awayStr = teamStrengthFromMatches(am, awayId, eloR);
+      const { lambdaHome: lH, lambdaAway: lA } = expectedGoals(homeStr, awayStr);
 
       const models = {
         poisson: poissonPrediction(lH, lA),
         elo: eloPrediction(homeId, awayId, eloR),
-        form: hm.length > 0 || am.length > 0 ? formPrediction(hm, am, homeId, awayId) : eloPrediction(homeId, awayId, eloR),
-        xg: hm.length > 0 || am.length > 0 ? xgPrediction(hm, am, homeId, awayId, eloR) : eloPrediction(homeId, awayId, eloR),
-        ml: hm.length > 0 || am.length > 0 ? mlPrediction(hm, am, homeId, awayId, eloR) : eloPrediction(homeId, awayId, eloR),
+        form: formPrediction(hm, am, homeId, awayId, eloR),
+        xg: xgPrediction(hm, am, homeId, awayId, eloR),
+        ml: mlPrediction(hm, am, homeId, awayId, eloR),
       };
+      if (homeTeam?.tla && awayTeam?.tla) {
+        models.fifa = fifaRankPrediction(homeTeam.tla, awayTeam.tla);
+      }
       models.ensemble = ensemblePrediction(models, DEFAULT_WEIGHTS, simCount);
 
       setResults(models);
