@@ -1,12 +1,14 @@
 import { MODEL_IDS, MODEL_LABELS } from '../../models/ensemble.js';
 
 const MODEL_COLORS = {
-  poisson: '#00D4AA',
-  elo:     '#7AACCC',
-  form:    '#F5A623',
-  xg:      '#BC8CFF',
-  ml:      '#3FB950',
-  fifa:    '#FFD700',
+  poisson:    '#00D4AA',
+  elo:        '#7AACCC',
+  form:       '#F5A623',
+  xg:         '#BC8CFF',
+  fifa:       '#FFD700',
+  confShrink: '#FF8FB1',
+  h2h:        '#5FD3F3',
+  market:     '#3FB950',
 };
 
 export default function ModelWeights({ weights, onChange, mode, onModeChange }) {

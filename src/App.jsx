@@ -6,6 +6,7 @@ import TabBar from './components/layout/TabBar.jsx';
 import MatchPredictor from './components/tabs/MatchPredictor.jsx';
 import ShotsPredictor from './components/tabs/ShotsPredictor.jsx';
 import ModelComparison from './components/tabs/ModelComparison.jsx';
+import Backtest from './components/tabs/Backtest.jsx';
 import History from './components/tabs/History.jsx';
 import Settings from './components/tabs/Settings.jsx';
 import { hasApiKey } from './api/footballApi.js';
@@ -27,6 +28,7 @@ function AppContent() {
         {activeTab === 'predictor'  && <MatchPredictor />}
         {activeTab === 'shots'      && <ShotsPredictor />}
         {activeTab === 'comparison' && <ModelComparison />}
+        {activeTab === 'backtest'   && <Backtest />}
         {activeTab === 'history'    && <History />}
         {activeTab === 'settings'   && <Settings />}
       </main>

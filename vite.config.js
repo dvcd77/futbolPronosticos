@@ -25,6 +25,12 @@ export default defineConfig({
         rewrite: path => path.replace(/^\/api\/apifootball/, ''),
         secure: true,
       },
+      '/api/espn': {
+        target: 'https://site.api.espn.com/apis/site/v2/sports/soccer',
+        changeOrigin: true,
+        rewrite: path => path.replace(/^\/api\/espn/, ''),
+        secure: true,
+      },
     },
   },
 })

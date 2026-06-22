@@ -1,36 +1,48 @@
 import { mean } from './utils.js';
 import { runMonteCarlo } from './monteCarlo.js';
 
-export const MODEL_IDS = ['poisson', 'elo', 'form', 'xg', 'ml', 'fifa'];
+// Modelos "siempre disponibles" (no dependen de condiciones externas) +
+// modelos "condicionales" (solo votan cuando hay datos suficientes: h2h
+// requiere enfrentamientos previos, market requiere mercado de cuotas abierto).
+export const MODEL_IDS = ['poisson', 'elo', 'form', 'xg', 'fifa', 'confShrink', 'h2h', 'market'];
+
 export const MODEL_LABELS = {
-  poisson: 'Poisson',
-  elo:     'ELO',
-  form:    'Forma',
-  xg:      'xG Aprox',
-  ml:      'ML Ligero',
-  fifa:    'Ranking FIFA',
-  ensemble:'Ensemble',
+  poisson:    'Poisson',
+  elo:        'ELO',
+  form:       'Forma',
+  xg:         'xG Aprox',
+  fifa:       'Ranking FIFA',
+  confShrink: 'Shrinkage Conf.',
+  h2h:        'Head-to-Head',
+  market:     'Mercado',
+  ensemble:   'Ensemble',
 };
 
-// Pesos rebalanceados para incluir Ranking FIFA. Este modelo no depende de
-// qué competencias cubre la API de partidos (FIFA computa su ranking con
-// TODOS los partidos oficiales, incluyendo AFCON, Copa América, Gold Cup),
-// así que actúa como contrapeso cuando el historial de partidos es escaso.
+// Pesos por defecto. h2h y market frecuentemente NO estarán disponibles para
+// un partido dado (sin enfrentamientos previos / sin mercado abierto aún) —
+// el ensemble renormaliza automáticamente entre los modelos presentes, así
+// que estos pesos reflejan la importancia RELATIVA cuando todo está disponible.
+// market recibe el mayor peso individual porque es la única señal que
+// incorpora información que ningún modelo casero puede ver (lesiones,
+// alineaciones, dinero informado) — en la práctica de modelos predictivos
+// deportivos, el mercado suele superar a modelos estadísticos aislados.
 export const DEFAULT_WEIGHTS = {
-  poisson: 0.20,
-  elo:     0.15,
-  form:    0.20,
-  xg:      0.15,
-  ml:      0.10,
-  fifa:    0.20,
+  poisson:    0.16,
+  elo:        0.12,
+  form:       0.16,
+  xg:         0.12,
+  fifa:       0.14,
+  confShrink: 0.08,
+  h2h:        0.07,
+  market:     0.15,
 };
 
 /**
  * Combines predictions from multiple models using configurable weights.
  * Operates on lambdas (expected goals) for a richer combination.
  *
- * @param {Object} modelPredictions - only models with real (non-aliased) predictions
- * @param {Object} weights          - { poisson: 0.25, elo: 0.20, ... }
+ * @param {Object} modelPredictions - solo modelos con predicción real (no null)
+ * @param {Object} weights          - { poisson: 0.16, elo: 0.12, ... }
  * @param {number} simCount         - Monte Carlo simulation count
  */
 export function ensemblePrediction(modelPredictions, weights = DEFAULT_WEIGHTS, simCount = 20000) {

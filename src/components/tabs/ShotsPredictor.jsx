@@ -276,10 +276,10 @@ export default function ShotsPredictor() {
         <SectionTitle>Predicción de disparos por partido</SectionTitle>
         <div className="controls-grid">
           <TeamSelector teams={displayTeams} value={homeId} onChange={setHomeId}
-            label="🏠 Local" excludeId={awayId} />
+            label="🏠 Local" excludeId={awayId} disabled={loading} />
           <span className="vs-label" style={{ color: '#3a5070', fontSize: 20, paddingBottom: 8 }}>vs</span>
           <TeamSelector teams={displayTeams} value={awayId} onChange={setAwayId}
-            label="✈️ Visitante" excludeId={homeId} />
+            label="✈️ Visitante" excludeId={homeId} disabled={loading} />
           <button className="btn-primary" onClick={runShots}
             disabled={loading || !homeId || !awayId}
             style={{ paddingTop: 10, paddingBottom: 10 }}>

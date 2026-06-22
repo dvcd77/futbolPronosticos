@@ -3,8 +3,6 @@ import { poissonRandom, mean, stdDev } from './utils.js';
 // International football empirical constants
 const SHOTS_PER_GOAL      = 10.2;  // total shots per goal scored
 const SOT_PER_GOAL        = 4.1;   // shots on target per goal scored
-const BASE_SHOTS_TEAM     = 10.5;  // shots per team per match baseline
-const BASE_SOT_TEAM       = 4.0;   // shots on target per team per match baseline
 
 // Position multiplier for shots per goal
 const POSITION_MULT = {

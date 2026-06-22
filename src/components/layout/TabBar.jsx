@@ -2,6 +2,7 @@ const TABS = [
   { id: 'predictor',   label: 'Pronóstico',    icon: '🎯' },
   { id: 'shots',       label: 'Disparos',       icon: '⚡' },
   { id: 'comparison',  label: 'Comparar',       icon: '📊' },
+  { id: 'backtest',    label: 'Validación',     icon: '🔬' },
   { id: 'history',     label: 'Historial',      icon: '📋' },
   { id: 'settings',    label: 'Config',         icon: '⚙️' },
 ];

@@ -34,7 +34,7 @@ function HistoryEntry({ entry, onDelete }) {
             <span style={{ color: '#F5A623' }}>{awayTeam}</span>
           </div>
           <div style={{ fontSize: 11, color: '#3a5070', marginTop: 3 }}>
-            {MODEL_LABELS[model] ?? model} · {dateStr}
+            {MODEL_LABELS[model] ?? 'Modelo anterior'} · {dateStr}
           </div>
         </div>
 
@@ -105,7 +105,7 @@ export default function History() {
     const rows = history.map(e => [
       new Date(e.date).toLocaleString('es-CO'),
       e.homeTeam, e.awayTeam,
-      MODEL_LABELS[e.model] ?? e.model,
+      MODEL_LABELS[e.model] ?? 'Modelo anterior',
       (e.result.home * 100).toFixed(1),
       (e.result.draw * 100).toFixed(1),
       (e.result.away * 100).toFixed(1),

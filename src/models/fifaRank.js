@@ -54,8 +54,6 @@ export function fifaRankPrediction(homeTla, awayTla) {
     scores: details.scores,
     over: details.over,
     under: details.under,
-    teamOver: details.teamOver,
-    teamUnder: details.teamUnder,
     btts: details.btts,
     halfTime: details.halfTime,
     lambdaHome,

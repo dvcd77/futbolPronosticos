@@ -21,6 +21,7 @@ const TTL = {
   teamSearch:    7  * 86400_000,  // 7 días — el ID de un equipo no cambia
   teamFixtures:  3  * 3600_000,   // 3 horas
   leagueList:    30 * 86400_000,  // 30 días
+  fixtureStats:  30 * 86400_000,  // 30 días — el xG de un partido FINALIZADO nunca cambia
 };
 
 // ── Rate-limit queue (mismo patrón que footballApi.js) ────────────────────────
@@ -105,6 +106,19 @@ export function getMaskedApiFootballKey() {
   return k ? k.slice(0, 4) + '****' + k.slice(-4) : '';
 }
 
+/**
+ * Toggle para el xG real. Como cada predicción nueva con xG cuesta ~8
+ * solicitudes de las 100/día, el usuario puede desactivarlo para cuidar la
+ * cuota (cae a la aproximación de xG desde goles). Por defecto: activado.
+ */
+export function isRealXGEnabled() {
+  return localStorage.getItem('afapi_realxg_off') !== '1';
+}
+export function setRealXGEnabled(enabled) {
+  if (enabled) localStorage.removeItem('afapi_realxg_off');
+  else localStorage.setItem('afapi_realxg_off', '1');
+}
+
 /** Prueba la key contra el endpoint /status (no consume cuota relevante) */
 export async function testApiFootballKey(key) {
   localStorage.setItem('afapi_key', key.trim());
@@ -156,32 +170,43 @@ export async function fetchTeamFixtures(teamId, last = 20) {
  * que no clasificaron al Mundial, etc.) se genera un ID estable basado en
  * el ID de API-Football — no se reconcilia pero tampoco rompe el cálculo.
  *
+ * IMPORTANTE: la reconciliación se hace en INGLÉS (vía `team.enName`), no en
+ * español. API-Football, ESPN y prácticamente cualquier API de datos
+ * deportivos devuelven nombres en inglés ("Morocco", no "Marruecos") — si el
+ * mapa de búsqueda se construye con nombres en español, NINGÚN equipo cuyo
+ * nombre difiera entre idiomas (la mayoría) se reconciliaría jamás.
+ *
  * @param {Object} fx - fixture crudo de API-Football
- * @param {Map<string,object>} nameToTeam - Map de nombre normalizado → team de FALLBACK_TEAMS
+ * @param {Map<string,object>} nameToTeam - Map de nombre EN INGLÉS normalizado → team
  */
 const NAME_ALIASES = {
-  'usa': 'estados unidos', 'united states': 'estados unidos',
-  'south korea': 'corea del sur', 'korea republic': 'corea del sur',
-  'ivory coast': 'costa de marfil', "cote d'ivoire": 'costa de marfil', "côte d'ivoire": 'costa de marfil',
-  'dr congo': 'congo rd', 'congo dr': 'congo rd',
-  'iran': 'irán', 'ir iran': 'irán',
-  'saudi arabia': 'arabia saudita',
-  'cape verde': 'cabo verde', 'cabo verde islands': 'cabo verde',
-  'türkiye': 'turquía', 'turkey': 'turquía',
-  'czechia': 'chequia', 'czech republic': 'chequia',
-  'bosnia and herzegovina': 'bosnia y herzegovina', 'bosnia': 'bosnia y herzegovina',
-  'south africa': 'sudáfrica', 'new zealand': 'nueva zelanda',
-  'south korea republic': 'corea del sur',
+  // Variantes de nombre en inglés que distintas APIs pueden devolver,
+  // normalizadas al nombre canónico usado en `enName` (ver AppContext.jsx)
+  'united states': 'usa', 'united states of america': 'usa',
+  'korea republic': 'south korea', 'republic of korea': 'south korea', 'korea': 'south korea',
+  "côte d'ivoire": 'ivory coast', "cote d'ivoire": 'ivory coast', 'cote divoire': 'ivory coast',
+  'congo dr': 'dr congo', 'democratic republic of the congo': 'dr congo', 'dr congo': 'dr congo',
+  'ir iran': 'iran',
+  'czechia': 'czech republic',
+  'türkiye': 'turkey', 'turkiye': 'turkey',
+  'bosnia': 'bosnia and herzegovina', 'bosnia-herzegovina': 'bosnia and herzegovina',
+  'cabo verde': 'cape verde', 'cabo verde islands': 'cape verde',
+  'netherlands antilles': 'curacao',
 };
 
-function normalizeTeamName(name) {
+export function normalizeTeamName(name) {
   const n = (name ?? '').toLowerCase().trim();
   return NAME_ALIASES[n] ?? n;
 }
 
+/**
+ * Construye el mapa nombre(inglés)→equipo usado para reconciliar fixtures
+ * de fuentes en inglés (API-Football, ESPN) contra nuestra lista de equipos.
+ * Usa `enName` (no `name`, que está en español) como clave.
+ */
 export function buildNameToTeamMap(teams) {
   const map = new Map();
-  teams.forEach(t => map.set(normalizeTeamName(t.name), t));
+  teams.forEach(t => map.set(normalizeTeamName(t.enName ?? t.name), t));
   return map;
 }
 
@@ -205,6 +230,11 @@ export function normalizeApiFootballFixture(fx, nameToTeam) {
       fullTime: { home: fx.goals?.home ?? null, away: fx.goals?.away ?? null },
     },
     source: 'api-football',
+    // Metadatos crudos de API-Football, necesarios para pedir el xG después
+    // (el xG no viene en el fixture base, requiere /fixtures/statistics).
+    _afFixtureId: fx.fixture.id,
+    _afHomeId: fx.teams.home?.id,
+    _afAwayId: fx.teams.away?.id,
   };
 }
 
@@ -229,6 +259,106 @@ export async function findApiFootballTeamId(teamName) {
   const id = exact?.team?.id;
   if (id) localStorage.setItem(cacheKey, String(id));
   return id ?? null;
+}
+
+/**
+ * Trae las estadísticas de un fixture (incluyendo xG) desde /fixtures/statistics.
+ * El xG NO viene en el fixture base — requiere esta llamada extra. Como el
+ * xG de un partido finalizado nunca cambia, se cachea 30 días.
+ *
+ * @param {number} fixtureId - ID de fixture de API-Football (sin el prefijo "af_")
+ * @returns {Array} respuesta cruda de statistics (una entrada por equipo)
+ */
+export async function fetchFixtureStatistics(fixtureId) {
+  const url = `${BASE_URL}/fixtures/statistics?fixture=${fixtureId}`;
+  const data = await fetchCached(url, TTL.fixtureStats);
+  return data.response ?? [];
+}
+
+/**
+ * Extrae el valor de xG de la respuesta de statistics de un equipo.
+ * El campo "Expected Goals" puede venir como número o string ("1.75"),
+ * o estar ausente (null) si el partido no tiene cobertura de xG.
+ */
+function extractXGFromStats(teamStats) {
+  const stats = teamStats?.statistics ?? [];
+  const xgEntry = stats.find(s =>
+    s.type === 'Expected Goals' || s.type === 'expected_goals'
+  );
+  if (!xgEntry || xgEntry.value == null) return null;
+  const val = typeof xgEntry.value === 'string'
+    ? parseFloat(xgEntry.value)
+    : xgEntry.value;
+  return Number.isFinite(val) ? val : null;
+}
+
+/**
+ * Obtiene el xG real (a favor y en contra) de un equipo en un partido
+ * específico de API-Football. Devuelve null si el partido no tiene xG.
+ *
+ * @param {number} fixtureId - ID de fixture (sin prefijo)
+ * @param {number} afTeamId  - ID de equipo de API-Football
+ * @returns {{ xgFor: number, xgAgainst: number } | null}
+ */
+export async function fetchMatchXG(fixtureId, afTeamId) {
+  const stats = await fetchFixtureStatistics(fixtureId);
+  if (stats.length < 2) return null;
+
+  const teamStat = stats.find(s => s.team?.id === afTeamId);
+  const oppStat  = stats.find(s => s.team?.id !== afTeamId);
+  if (!teamStat || !oppStat) return null;
+
+  const xgFor     = extractXGFromStats(teamStat);
+  const xgAgainst = extractXGFromStats(oppStat);
+  if (xgFor == null && xgAgainst == null) return null;
+
+  return { xgFor, xgAgainst };
+}
+
+/**
+ * Calcula el xG real promedio (a favor y en contra) de un equipo a partir de
+ * sus partidos recientes de API-Football que tengan metadatos de fixture.
+ *
+ * Consciente del presupuesto: cada partido cuesta 1 solicitud a
+ * /fixtures/statistics, y el límite gratuito es 100/día. Por eso solo
+ * consulta los `maxFixtures` partidos más recientes (default 6) y se detiene
+ * si la cuota se agota. Devuelve null si ningún partido tiene xG disponible.
+ *
+ * @param {Array} afMatches - partidos del equipo ya normalizados (con _afFixtureId)
+ * @param {number} afTeamId - ID de equipo de API-Football
+ * @param {number} maxFixtures - tope de partidos a consultar (presupuesto)
+ * @returns {{ xgForPer90: number, xgAgainstPer90: number, sampleSize: number } | null}
+ */
+export async function fetchTeamAverageXG(afMatches, afTeamId, maxFixtures = 6) {
+  // Solo partidos con metadatos crudos de API-Football, más recientes primero
+  const candidates = afMatches
+    .filter(m => m._afFixtureId && (m._afHomeId === afTeamId || m._afAwayId === afTeamId))
+    .sort((a, b) => new Date(b.utcDate) - new Date(a.utcDate))
+    .slice(0, maxFixtures);
+
+  if (candidates.length === 0) return null;
+
+  let sumFor = 0, sumAgainst = 0, n = 0;
+  for (const m of candidates) {
+    try {
+      const xg = await fetchMatchXG(m._afFixtureId, afTeamId);
+      if (xg && xg.xgFor != null && xg.xgAgainst != null) {
+        sumFor += xg.xgFor;
+        sumAgainst += xg.xgAgainst;
+        n++;
+      }
+    } catch (e) {
+      // 429 = cuota agotada: dejamos de pedir, usamos lo acumulado hasta ahora
+      if (/excedido|429/i.test(e.message)) break;
+    }
+  }
+
+  if (n === 0) return null;
+  return {
+    xgForPer90: sumFor / n,
+    xgAgainstPer90: sumAgainst / n,
+    sampleSize: n,
+  };
 }
 
 export function getQueueLength() { return queue.length; }

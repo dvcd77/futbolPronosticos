@@ -5,13 +5,20 @@ import { teamStrengthFromMatches, expectedGoals, poissonPrediction } from '../..
 import { buildEloRatings, eloPrediction } from '../../models/elo.js';
 import { formPrediction } from '../../models/form.js';
 import { xgPrediction } from '../../models/xg.js';
-import { mlPrediction } from '../../models/ml.js';
 import { fifaRankPrediction } from '../../models/fifaRank.js';
+import { headToHeadPrediction } from '../../models/headToHead.js';
+import { confederationShrinkagePrediction } from '../../models/confederationShrinkage.js';
+import { marketPrediction } from '../../models/market.js';
+import { hasOddsApiKey, fetchWorldCupOdds, matchOddsToTeams, averageH2HOdds, impliedProbabilities } from '../../api/oddsApi.js';
 import { ensemblePrediction, MODEL_IDS, MODEL_LABELS, DEFAULT_WEIGHTS } from '../../models/ensemble.js';
 import { fetchTeamMatches, hasApiKey } from '../../api/footballApi.js';
 import { RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, Tooltip } from 'recharts';
 
-const MODEL_COLORS = { poisson:'#00D4AA', elo:'#7AACCC', form:'#F5A623', xg:'#BC8CFF', ml:'#3FB950', fifa:'#FFD700', ensemble:'#F85149' };
+const MODEL_COLORS = {
+  poisson:'#00D4AA', elo:'#7AACCC', form:'#F5A623', xg:'#BC8CFF',
+  fifa:'#FFD700', confShrink:'#FF8FB1', h2h:'#5FD3F3', market:'#3FB950',
+  ensemble:'#F85149',
+};
 
 function PctCell({ value, color }) {
   if (value == null) return <td style={{ padding: '8px 12px', color: '#3a5070', textAlign: 'center' }}>—</td>;
@@ -57,7 +64,11 @@ export default function ModelComparison() {
     setError(''); setLoading(true); setResults(null);
 
     try {
-      const [hm, am] = await Promise.all([loadMatches(homeId), loadMatches(awayId)]);
+      const [hm, am, oddsEvents] = await Promise.all([
+        loadMatches(homeId),
+        loadMatches(awayId),
+        hasOddsApiKey() ? fetchWorldCupOdds().catch(() => []) : Promise.resolve([]),
+      ]);
       setApiStatus(prev => ({ ...prev, ok: hasApiKey() }));
 
       // ELO computed first so all models can use it as a fallback signal
@@ -73,11 +84,26 @@ export default function ModelComparison() {
         elo: eloPrediction(homeId, awayId, eloR),
         form: formPrediction(hm, am, homeId, awayId, eloR),
         xg: xgPrediction(hm, am, homeId, awayId, eloR),
-        ml: mlPrediction(hm, am, homeId, awayId, eloR),
       };
       if (homeTeam?.tla && awayTeam?.tla) {
         models.fifa = fifaRankPrediction(homeTeam.tla, awayTeam.tla);
       }
+      models.confShrink = confederationShrinkagePrediction(
+        homeTeam, awayTeam, homeStr.matchCount ?? 0, awayStr.matchCount ?? 0, eloR, displayTeams
+      );
+      models.h2h = headToHeadPrediction([...hm, ...am], homeId, awayId);
+
+      if (oddsEvents.length > 0) {
+        const event = matchOddsToTeams(oddsEvents, homeTeam, awayTeam);
+        if (event) {
+          const h2hOdds = averageH2HOdds(event);
+          if (h2hOdds) {
+            const implied = impliedProbabilities(h2hOdds);
+            models.market = marketPrediction(implied, { bookmakerCount: h2hOdds.bookmakerCount, vigPercent: implied.vigPercent });
+          }
+        }
+      }
+
       models.ensemble = ensemblePrediction(models, DEFAULT_WEIGHTS, simCount);
 
       setResults(models);
@@ -120,9 +146,9 @@ export default function ModelComparison() {
       <div className="card" style={{ marginBottom: 20 }}>
         <SectionTitle>Comparación de todos los modelos</SectionTitle>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr auto', gap: 12, alignItems: 'end' }}>
-          <TeamSelector teams={displayTeams} value={homeId} onChange={setHomeId} label="Local" excludeId={awayId} />
+          <TeamSelector teams={displayTeams} value={homeId} onChange={setHomeId} label="Local" excludeId={awayId} disabled={loading} />
           <span style={{ color: '#3a5070', fontSize: 20, paddingBottom: 8 }}>vs</span>
-          <TeamSelector teams={displayTeams} value={awayId} onChange={setAwayId} label="Visitante" excludeId={homeId} />
+          <TeamSelector teams={displayTeams} value={awayId} onChange={setAwayId} label="Visitante" excludeId={homeId} disabled={loading} />
           <button className="btn-primary" onClick={runComparison} disabled={loading || !homeId || !awayId}
             style={{ paddingBottom: 10, paddingTop: 10 }}>
             {loading ? <Spinner size={16} /> : '📊 Comparar'}

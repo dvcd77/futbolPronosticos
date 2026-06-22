@@ -7,6 +7,7 @@
  *   Browser → /api/football/*     → api.football-data.org/v4/*
  *   Browser → /api/odds/*         → api.the-odds-api.com/v4/*
  *   Browser → /api/apifootball/*  → v3.football.api-sports.io/*
+ *   Browser → /api/espn/*         → site.api.espn.com/apis/site/v2/sports/soccer/*
  */
 
 import express from 'express';
@@ -87,6 +88,13 @@ app.use('/api/apifootball', (req, res, next) => {
   };
   next();
 }, proxyTo('v3.football.api-sports.io', ''));
+
+// ── 3c. Proxy /api/espn/* → site.api.espn.com/apis/site/v2/sports/soccer/* ────
+// API no oficial de ESPN, sin autenticación — fuente terciaria de respaldo.
+app.use('/api/espn', (req, res, next) => {
+  req._proxyHeaders = { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0 WC2026-Predictor/1.0' };
+  next();
+}, proxyTo('site.api.espn.com', '/apis/site/v2/sports/soccer'));
 
 // ── 4. SPA fallback — Express 5: wildcard se escribe '{*path}' ────────────────
 app.get('{*path}', (_req, res) => {

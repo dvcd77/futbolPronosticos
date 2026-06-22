@@ -7,15 +7,21 @@ import { teamStrengthFromMatches, expectedGoals as poissonEG, poissonPrediction 
 import { buildEloRatings, eloPrediction } from '../../models/elo.js';
 import { formPrediction } from '../../models/form.js';
 import { xgPrediction } from '../../models/xg.js';
-import { mlPrediction } from '../../models/ml.js';
 import { fifaRankPrediction } from '../../models/fifaRank.js';
+import { headToHeadPrediction } from '../../models/headToHead.js';
+import { confederationShrinkagePrediction } from '../../models/confederationShrinkage.js';
+import { marketPrediction } from '../../models/market.js';
 import { ensemblePrediction, MODEL_IDS, MODEL_LABELS } from '../../models/ensemble.js';
 import { runMonteCarlo } from '../../models/monteCarlo.js';
 import { fetchTeamMatches, hasApiKey } from '../../api/footballApi.js';
 import {
   hasApiFootballKey, findApiFootballTeamId, fetchTeamFixtures,
-  normalizeApiFootballFixture, buildNameToTeamMap,
+  normalizeApiFootballFixture, buildNameToTeamMap, normalizeTeamName,
+  fetchTeamAverageXG, isRealXGEnabled,
 } from '../../api/apiFootball.js';
+import {
+  isEspnEnabled, findEspnTeamId, fetchEspnTeamSchedule, normalizeEspnEvent,
+} from '../../api/espnApi.js';
 import {
   hasOddsApiKey, fetchWorldCupOdds, matchOddsToTeams,
   averageH2HOdds, averageTotalsOdds, impliedProbabilities,
@@ -23,8 +29,9 @@ import {
 import { BarChart, Bar, XAxis, YAxis, Cell, Tooltip, ResponsiveContainer } from 'recharts';
 
 const MODEL_COLORS = {
-  poisson: '#00D4AA', elo: '#7AACCC', form: '#F5A623',
-  xg: '#BC8CFF', ml: '#3FB950', fifa: '#FFD700', ensemble: '#F85149',
+  poisson: '#00D4AA', elo: '#7AACCC', form: '#F5A623', xg: '#BC8CFF',
+  fifa: '#FFD700', confShrink: '#FF8FB1', h2h: '#5FD3F3', market: '#3FB950',
+  ensemble: '#F85149',
 };
 
 // Defined outside the component so it is never recreated on each render
@@ -62,31 +69,7 @@ function EdgeBadge({ edge }) {
   );
 }
 
-function OddsComparison({ homeTeam, awayTeam, result }) {
-  const [oddsState, setOddsState] = useState({ status: 'idle' }); // idle | loading | found | not_found | error
-
-  async function loadOdds() {
-    setOddsState({ status: 'loading' });
-    try {
-      const events = await fetchWorldCupOdds();
-      const event = matchOddsToTeams(events, homeTeam, awayTeam);
-      if (!event) {
-        setOddsState({ status: 'not_found' });
-        return;
-      }
-      const h2h = averageH2HOdds(event);
-      const totals25 = averageTotalsOdds(event, 2.5);
-      if (!h2h) {
-        setOddsState({ status: 'not_found' });
-        return;
-      }
-      const implied = impliedProbabilities(h2h);
-      setOddsState({ status: 'found', h2h, totals25, implied, bookmakerCount: h2h.bookmakerCount });
-    } catch (e) {
-      setOddsState({ status: 'error', message: e.message });
-    }
-  }
-
+function OddsComparison({ homeTeam, awayTeam, result, oddsData }) {
   if (!hasOddsApiKey()) {
     return (
       <div className="card">
@@ -94,7 +77,9 @@ function OddsComparison({ homeTeam, awayTeam, result }) {
           🎰 Cuotas de casas de apuestas
         </SectionTitle>
         <div style={{ fontSize: 13, color: '#5a7a9a', textAlign: 'center', padding: '12px 0' }}>
-          💡 Agrega tu API key gratuita de The Odds API en ⚙️ Configuración para comparar tus pronósticos contra cuotas reales del mercado.
+          💡 Agrega tu API key gratuita de The Odds API en ⚙️ Configuración. Cuando esté
+          configurada, el mercado se consulta automáticamente al predecir y, si hay cuotas
+          disponibles, vota como un modelo más en el ensemble.
         </div>
       </div>
     );
@@ -102,35 +87,18 @@ function OddsComparison({ homeTeam, awayTeam, result }) {
 
   return (
     <div className="card">
-      <SectionTitle sub="Probabilidad implícita del mercado (cuotas promedio, margen de casa removido) vs tu modelo">
+      <SectionTitle sub="Probabilidad implícita del mercado (cuotas promedio, margen de casa removido) — ya incluida como voto en el ensemble si está disponible">
         🎰 Cuotas de casas de apuestas
       </SectionTitle>
 
-      {oddsState.status === 'idle' && (
-        <button className="btn-secondary" onClick={loadOdds} style={{ width: '100%', justifyContent: 'center' }}>
-          📡 Buscar cuotas para este partido
-        </button>
+      {!oddsData && (
+        <InfoBox message="No se encontraron cuotas para este partido. Los mercados suelen abrir pocos días antes del encuentro — vuelve a predecir más cerca de la fecha." />
       )}
 
-      {oddsState.status === 'loading' && (
-        <div style={{ textAlign: 'center', padding: '12px 0' }}>
-          <Spinner size={18} />
-          <div style={{ fontSize: 12, color: '#5a7a9a', marginTop: 8 }}>Consultando casas de apuestas...</div>
-        </div>
-      )}
-
-      {oddsState.status === 'not_found' && (
-        <InfoBox message="No se encontraron cuotas para este partido. Los mercados suelen abrir pocos días antes del encuentro." />
-      )}
-
-      {oddsState.status === 'error' && (
-        <ErrorBox message={oddsState.message} />
-      )}
-
-      {oddsState.status === 'found' && (
+      {oddsData && (
         <div>
           <div style={{ fontSize: 11, color: '#3a5070', marginBottom: 14 }}>
-            Promedio de {oddsState.bookmakerCount} casa{oddsState.bookmakerCount !== 1 ? 's' : ''} de apuestas · Margen de casa: {oddsState.implied.vigPercent.toFixed(1)}%
+            Promedio de {oddsData.bookmakerCount} casa{oddsData.bookmakerCount !== 1 ? 's' : ''} de apuestas · Margen de casa: {oddsData.implied.vigPercent.toFixed(1)}%
           </div>
 
           {/* 1X2 comparison table */}
@@ -144,7 +112,7 @@ function OddsComparison({ homeTeam, awayTeam, result }) {
           {/* Bookmaker odds row */}
           <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr 1fr 1fr', gap: 8, marginBottom: 4, alignItems: 'center' }}>
             <div style={{ fontSize: 11, color: '#5a7a9a' }}>Cuota</div>
-            {[oddsState.h2h.home, oddsState.h2h.draw, oddsState.h2h.away].map((odd, i) => (
+            {[oddsData.h2h.home, oddsData.h2h.draw, oddsData.h2h.away].map((odd, i) => (
               <div key={i} style={{ textAlign: 'center', fontFamily: 'monospace', fontSize: 14, fontWeight: 700, color: '#D8E6F3' }}>
                 {odd != null ? odd.toFixed(2) : '—'}
               </div>
@@ -154,7 +122,7 @@ function OddsComparison({ homeTeam, awayTeam, result }) {
           {/* Implied probability row */}
           <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr 1fr 1fr', gap: 8, marginBottom: 4, alignItems: 'center' }}>
             <div style={{ fontSize: 11, color: '#5a7a9a' }}>Mercado</div>
-            {[oddsState.implied.home, oddsState.implied.draw, oddsState.implied.away].map((p, i) => (
+            {[oddsData.implied.home, oddsData.implied.draw, oddsData.implied.away].map((p, i) => (
               <div key={i} style={{ textAlign: 'center', fontFamily: 'monospace', fontSize: 13, color: '#7AACCC' }}>
                 {(p * 100).toFixed(1)}%
               </div>
@@ -175,16 +143,16 @@ function OddsComparison({ homeTeam, awayTeam, result }) {
           <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr 1fr 1fr', gap: 8, marginBottom: 14, alignItems: 'center' }}>
             <div style={{ fontSize: 11, color: '#5a7a9a' }}>Diferencia</div>
             {[
-              result.home - oddsState.implied.home,
-              result.draw - oddsState.implied.draw,
-              result.away - oddsState.implied.away,
+              result.home - oddsData.implied.home,
+              result.draw - oddsData.implied.draw,
+              result.away - oddsData.implied.away,
             ].map((edge, i) => (
               <div key={i} style={{ textAlign: 'center' }}><EdgeBadge edge={edge} /></div>
             ))}
           </div>
 
           {/* Totals 2.5 comparison (if available) */}
-          {oddsState.totals25 && (
+          {oddsData.totals25 && (
             <div style={{ borderTop: '1px solid #162844', paddingTop: 12 }}>
               <div className="label-sm" style={{ marginBottom: 8 }}>Total de goles · Línea 2.5</div>
               <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr 1fr', gap: 8, marginBottom: 4 }}>
@@ -194,16 +162,16 @@ function OddsComparison({ homeTeam, awayTeam, result }) {
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr 1fr', gap: 8, marginBottom: 4 }}>
                 <div style={{ fontSize: 11, color: '#5a7a9a' }}>Cuota</div>
-                <div style={{ textAlign: 'center', fontFamily: 'monospace', fontWeight: 700 }}>{oddsState.totals25.over.toFixed(2)}</div>
-                <div style={{ textAlign: 'center', fontFamily: 'monospace', fontWeight: 700 }}>{oddsState.totals25.under.toFixed(2)}</div>
+                <div style={{ textAlign: 'center', fontFamily: 'monospace', fontWeight: 700 }}>{oddsData.totals25.over.toFixed(2)}</div>
+                <div style={{ textAlign: 'center', fontFamily: 'monospace', fontWeight: 700 }}>{oddsData.totals25.under.toFixed(2)}</div>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr 1fr', gap: 8, marginBottom: 4 }}>
                 <div style={{ fontSize: 11, color: '#5a7a9a' }}>Mercado</div>
                 <div style={{ textAlign: 'center', fontFamily: 'monospace', fontSize: 12, color: '#7AACCC' }}>
-                  {((1 / oddsState.totals25.over) / (1/oddsState.totals25.over + 1/oddsState.totals25.under) * 100).toFixed(1)}%
+                  {((1 / oddsData.totals25.over) / (1/oddsData.totals25.over + 1/oddsData.totals25.under) * 100).toFixed(1)}%
                 </div>
                 <div style={{ textAlign: 'center', fontFamily: 'monospace', fontSize: 12, color: '#7AACCC' }}>
-                  {((1 / oddsState.totals25.under) / (1/oddsState.totals25.over + 1/oddsState.totals25.under) * 100).toFixed(1)}%
+                  {((1 / oddsData.totals25.under) / (1/oddsData.totals25.over + 1/oddsData.totals25.under) * 100).toFixed(1)}%
                 </div>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr 1fr', gap: 8 }}>
@@ -220,7 +188,8 @@ function OddsComparison({ homeTeam, awayTeam, result }) {
 
           <div style={{ fontSize: 10, color: '#3a5070', marginTop: 14, lineHeight: 1.6 }}>
             "Diferencia" verde = el modelo ve más probabilidad de la que paga el mercado.
-            Esto es solo informativo — no es una recomendación de apuesta.
+            Este mercado ya vota dentro del ensemble (modelo "Mercado") — esto es solo
+            para comparar visualmente. No es una recomendación de apuesta.
           </div>
         </div>
       )}
@@ -252,7 +221,10 @@ function useTeamData(displayTeams) {
       const team = displayTeams.find(t => t.id === teamId);
       if (team) {
         try {
-          const afTeamId = await findApiFootballTeamId(team.name);
+          // CRÍTICO: usar enName (inglés) — API-Football no encuentra nada
+          // si se busca con el nombre en español (ej. "Marruecos" → 0 resultados,
+          // hay que buscar "Morocco"). Fallback a `name` solo si no hay enName.
+          const afTeamId = await findApiFootballTeamId(team.enName ?? team.name);
           if (afTeamId) {
             const fixtures = await fetchTeamFixtures(afTeamId, 25);
             const nameToTeam = buildNameToTeamMap(displayTeams);
@@ -270,9 +242,7 @@ function useTeamData(displayTeams) {
               return true;
             });
 
-            matches = [...matches, ...newOnes].sort(
-              (a, b) => new Date(a.utcDate) - new Date(b.utcDate)
-            );
+            matches = [...matches, ...newOnes];
           }
         } catch (e) {
           console.warn('API-Football enrichment failed:', e.message);
@@ -280,6 +250,43 @@ function useTeamData(displayTeams) {
         }
       }
     }
+
+    // ── Enrich with ESPN (fuente terciaria: redundancia + amistosos) ──────────
+    // No requiere API key, solo un toggle en Configuración. El endpoint de
+    // schedule de ESPN agrega partidos de MÚLTIPLES competencias (incluyendo
+    // amistosos internacionales, la categoría peor cubierta por cualquier
+    // API estructurada) en una sola respuesta.
+    if (isEspnEnabled()) {
+      const team = displayTeams.find(t => t.id === teamId);
+      if (team) {
+        try {
+          const nameToTeam = buildNameToTeamMap(displayTeams);
+          const espnTeamId = await findEspnTeamId(team.enName ?? team.name, normalizeTeamName);
+          if (espnTeamId) {
+            const events = await fetchEspnTeamSchedule(espnTeamId);
+            const espnMatches = events
+              .map(ev => normalizeEspnEvent(ev, nameToTeam, normalizeTeamName))
+              .filter(Boolean);
+
+            const seen = new Set(matches.map(m => dedupeKey(m)));
+            const newOnes = espnMatches.filter(m => {
+              const key = dedupeKey(m);
+              if (seen.has(key)) return false;
+              seen.add(key);
+              return true;
+            });
+
+            matches = [...matches, ...newOnes];
+          }
+        } catch (e) {
+          console.warn('ESPN enrichment failed:', e.message);
+          // No crítico — fuente terciaria opcional
+        }
+      }
+    }
+
+    // Orden cronológico final tras combinar las 3 fuentes
+    matches.sort((a, b) => new Date(a.utcDate) - new Date(b.utcDate));
 
     setTeamMatchCache(prev => {
       const next = { ...prev, [teamId]: matches };
@@ -302,6 +309,47 @@ function dedupeKey(m) {
   return `${date}_${teams}_${score}`;
 }
 
+/**
+ * Construye el resultado a mostrar para un modelo individual.
+ *
+ * BUG CORREGIDO: antes, ver un modelo individual (ELO, Ranking FIFA) corría
+ * runMonteCarlo SOBRE sus lambdas y usaba TODO ese resultado — pero ELO y
+ * FIFA calculan home/draw/away con su PROPIA fórmula logística, distinta a
+ * la distribución de Poisson que usa Monte Carlo. Esto causaba que, para el
+ * mismo modelo, la tarjeta grande de 1X2 mostrara hasta 25 puntos
+ * porcentuales de diferencia respecto al botón "Comparar modelos rápido"
+ * (que lee los valores del modelo directamente).
+ *
+ * Fix: Monte Carlo se usa SOLO para aportar desviación estándar (stdDev,
+ * overStd, bttsStd, halfTimeStd, teamGoals con su propia std) — pero
+ * home/draw/away/scores/over/under/btts/halfTime siempre vienen del
+ * modelo mismo, nunca se sobrescriben.
+ */
+function buildModelDisplay(modelId, modelObj, simCount, useStaticFallback) {
+  if (modelId === 'ensemble') {
+    // El ensemble YA se computa enteramente vía Monte Carlo — no hay
+    // fórmula propia con la que pueda entrar en conflicto.
+    return { ...modelObj, model: modelId, useStaticFallback };
+  }
+
+  const mc = runMonteCarlo(modelObj.lambdaHome ?? 1.30, modelObj.lambdaAway ?? 1.30, simCount);
+
+  return {
+    ...mc,          // aporta totalSims, stdDev, overStd, bttsStd, halfTimeStd, teamGoals
+    ...modelObj,     // PERO el modelo manda en: home/draw/away/scores/over/under/btts/halfTime/lambdas
+    // Re-aplicamos explícitamente las métricas de incertidumbre de Monte Carlo,
+    // ya que el spread anterior las habría perdido al no existir en modelObj:
+    stdDev:      mc.stdDev,
+    overStd:     mc.overStd,
+    bttsStd:     mc.bttsStd,
+    halfTimeStd: mc.halfTimeStd,
+    teamGoals:   mc.teamGoals,
+    totalSims:   mc.totalSims,
+    model: modelId,
+    useStaticFallback,
+  };
+}
+
 export default function MatchPredictor() {
   const { teams, weights, setWeights, simCount, setSimCount, addToHistory, eloRatings } = useApp();
   const displayTeams = teams.length > 0 ? teams : FALLBACK_TEAMS;
@@ -316,6 +364,7 @@ export default function MatchPredictor() {
   const [result, setResult]         = useState(null);
   const [allModelResults, setAllModelResults] = useState(null);
   const [dataQuality, setDataQuality] = useState(null);
+  const [oddsData, setOddsData] = useState(null);
   const [showWeights, setShowWeights] = useState(false);
   const [saved, setSaved]           = useState(false);
 
@@ -325,12 +374,16 @@ export default function MatchPredictor() {
   async function runPrediction() {
     if (!homeId || !awayId)       { setError('Selecciona ambos equipos.'); return; }
     if (homeId === awayId)        { setError('Los equipos no pueden ser el mismo.'); return; }
-    setError(''); setLoading(true); setResult(null); setSaved(false); setDataQuality(null);
+    setError(''); setLoading(true); setResult(null); setSaved(false); setDataQuality(null); setOddsData(null);
 
     try {
-      const [homeMatches, awayMatches] = await Promise.all([
+      // Cuotas en paralelo con el historial de partidos — fetchWorldCupOdds()
+      // cachea TODOS los eventos por 1h, así que predecir varios partidos
+      // seguidos no gasta cuota adicional de The Odds API.
+      const [homeMatches, awayMatches, oddsEvents] = await Promise.all([
         loadTeamData(homeId),
         loadTeamData(awayId),
+        hasOddsApiKey() ? fetchWorldCupOdds().catch(() => []) : Promise.resolve([]),
       ]);
 
       const hasData = [
@@ -353,19 +406,69 @@ export default function MatchPredictor() {
       const { lambdaHome: lH_p, lambdaAway: lA_p } = poissonEG(homeStr, awayStr);
       models.poisson = poissonPrediction(lH_p, lA_p);
 
-      // ── Form, xG, ML: each uses ELO differently as fallback ───────────────
-      // Even without match history these now give DISTINCT probabilities.
+      // ── Form, xG: cada uno usa ELO de forma distinta como fallback ────────
       models.form = formPrediction(homeMatches, awayMatches, homeId, awayId, eloR);
-      models.xg   = xgPrediction(homeMatches, awayMatches, homeId, awayId, eloR);
-      models.ml   = mlPrediction(homeMatches, awayMatches, homeId, awayId, eloR);
 
-      // ── FIFA Ranking: independent of match-data availability. FIFA computes
-      // this with ALL official matches (including AFCON, Copa América, Gold
-      // Cup), so it's a valuable signal even when our match-history API
-      // doesn't cover the competition where a team was actually dominant.
+      // ── xG REAL (vía API-Football) cuando esté disponible ─────────────────
+      // El xG real es la mejora de mayor impacto documentada, pero cada
+      // partido cuesta 1 solicitud a /fixtures/statistics (límite 100/día).
+      // Por eso solo se pide para los 2 equipos de ESTE partido, limitado a
+      // sus partidos más recientes, y solo si hay key de API-Football.
+      // Si falla o no hay cobertura, xgPrediction cae a su aproximación.
+      let realXGHome = null, realXGAway = null;
+      if (hasApiFootballKey() && isRealXGEnabled()) {
+        try {
+          const afHomeId = await findApiFootballTeamId(homeTeam?.enName ?? homeTeam?.name);
+          const afAwayId = await findApiFootballTeamId(awayTeam?.enName ?? awayTeam?.name);
+          const afHomeMatches = homeMatches.filter(m => m.source === 'api-football');
+          const afAwayMatches = awayMatches.filter(m => m.source === 'api-football');
+          // Tope de 4 partidos: suficiente para un promedio estable de xG, y
+          // mantiene el costo en ~8 solicitudes/partido nuevo (de 100/día).
+          [realXGHome, realXGAway] = await Promise.all([
+            afHomeId ? fetchTeamAverageXG(afHomeMatches, afHomeId, 4).catch(() => null) : null,
+            afAwayId ? fetchTeamAverageXG(afAwayMatches, afAwayId, 4).catch(() => null) : null,
+          ]);
+        } catch (e) {
+          console.warn('Real xG fetch failed:', e.message);
+        }
+      }
+      models.xg = xgPrediction(homeMatches, awayMatches, homeId, awayId, eloR, realXGHome, realXGAway);
+
+      // ── FIFA Ranking: independiente de qué competencias cubre nuestra API
+      // de partidos — FIFA computa su ranking con TODOS los partidos
+      // oficiales (incluyendo AFCON, Copa América, Gold Cup).
       if (homeTeam?.tla && awayTeam?.tla) {
         models.fifa = fifaRankPrediction(homeTeam.tla, awayTeam.tla);
       }
+
+      // ── Shrinkage por confederación: ayuda específicamente a equipos con
+      // poco historial, usando el promedio de su confederación como prior
+      // en vez de un default genérico (1500 para cualquier equipo del mundo).
+      models.confShrink = confederationShrinkagePrediction(
+        homeTeam, awayTeam, homeStr.matchCount ?? 0, awayStr.matchCount ?? 0, eloR, displayTeams
+      );
+
+      // ── Head-to-Head: solo vota si estos 2 equipos se han enfrentado antes.
+      models.h2h = headToHeadPrediction([...homeMatches, ...awayMatches], homeId, awayId);
+
+      // ── Mercado: solo vota si el mercado de cuotas ya abrió para este partido.
+      let oddsDisplay = null;
+      if (oddsEvents.length > 0) {
+        const event = matchOddsToTeams(oddsEvents, homeTeam, awayTeam);
+        if (event) {
+          const h2hOdds = averageH2HOdds(event);
+          const totals25 = averageTotalsOdds(event, 2.5);
+          if (h2hOdds) {
+            const implied = impliedProbabilities(h2hOdds);
+            models.market = marketPrediction(implied, {
+              bookmakerCount: h2hOdds.bookmakerCount,
+              vigPercent: implied.vigPercent,
+            });
+            oddsDisplay = { h2h: h2hOdds, totals25, implied, bookmakerCount: h2hOdds.bookmakerCount };
+          }
+        }
+      }
+      setOddsData(oddsDisplay);
 
       // ── Data quality snapshot: lets the user verify WHY a prediction looks
       // a certain way. The free football-data.org tier doesn't cover every
@@ -378,30 +481,44 @@ export default function MatchPredictor() {
           fromElo:    homeStr.fromElo,
           elo:        models.elo.eloHome,
           afCount:    homeMatches.filter(m => m.source === 'api-football').length,
+          espnCount:  homeMatches.filter(m => m.source === 'espn').length,
         },
         away: {
           matchCount: awayStr.matchCount ?? 0,
           fromElo:    awayStr.fromElo,
           elo:        models.elo.eloAway,
           afCount:    awayMatches.filter(m => m.source === 'api-football').length,
+          espnCount:  awayMatches.filter(m => m.source === 'espn').length,
         },
+        h2hCount:     models.h2h?.h2hMatchCount ?? 0,
+        marketActive: models.market != null,
+        xgReal:       models.xg?.usesRealXG ?? false,
+        xgSampleHome: realXGHome?.sampleSize ?? 0,
+        xgSampleAway: realXGAway?.sampleSize ?? 0,
       });
 
       // ── Ensemble (Monte Carlo on weighted-average lambdas) ─────────────────
-      // All 5 models are always populated (with ELO-fallback if no match data)
+      // No todos los modelos estarán siempre disponibles (h2h/market son
+      // condicionales) — ensemblePrediction renormaliza automáticamente.
       const effWeights = weightsMode === 'auto'
         ? Object.fromEntries(MODEL_IDS.map(id => [id, 1 / MODEL_IDS.length]))
         : weights;
       models.ensemble = ensemblePrediction(models, effWeights, simCount);
 
       // ── Display result for the active model ────────────────────────────────
-      const active = models[activeModel] ?? models.ensemble;
-      const mcResult = activeModel === 'ensemble'
-        ? models.ensemble
-        : runMonteCarlo(active.lambdaHome ?? lH_p, active.lambdaAway ?? lA_p, simCount);
+      // BUG CORREGIDO: si `activeModel` venía de un partido ANTERIOR donde un
+      // modelo condicional (h2h/market) sí estaba disponible, y el usuario
+      // predice un partido NUEVO donde ese modelo NO está disponible,
+      // buildModelDisplay recibía el modelId viejo ('h2h') pero los datos
+      // del ensemble (por el `?? models.ensemble` fallback) — el resultado
+      // se mostraba con la etiqueta "Head-to-Head" pero los números eran del
+      // ensemble. Ahora se sincroniza activeModel con el modelo que
+      // REALMENTE se está mostrando.
+      const effectiveModel = models[activeModel] != null ? activeModel : 'ensemble';
+      if (effectiveModel !== activeModel) setActiveModel(effectiveModel);
 
       setAllModelResults(models);
-      setResult({ ...mcResult, model: activeModel, useStaticFallback: !hasData });
+      setResult(buildModelDisplay(effectiveModel, models[effectiveModel], simCount, !hasData));
     } catch (e) {
       setError(e.message ?? 'Error al calcular el pronóstico.');
     } finally {
@@ -422,15 +539,25 @@ export default function MatchPredictor() {
     setSaved(true);
   }
 
+  /**
+   * BUG CORREGIDO: antes, hacer clic en un modelo condicional no disponible
+   * (Head-to-Head o Mercado, cuando estos 2 equipos nunca se enfrentaron o
+   * no hay cuotas) actualizaba `activeModel` (resaltando el botón) PERO
+   * dejaba `result` con los datos del modelo anterior — el botón se veía
+   * seleccionado mientras la pantalla mostraba números de otro modelo,
+   * sin ningún aviso. Ahora la función es atómica: o actualiza activeModel
+   * Y result juntos, o no actualiza ninguno de los dos.
+   */
   function switchModel(modelId) {
-    setActiveModel(modelId);
-    if (!allModelResults) return;
+    if (!allModelResults) {
+      // Aún no se ha predicho — solo registra la preferencia para cuando se prediga
+      setActiveModel(modelId);
+      return;
+    }
     const m = allModelResults[modelId];
-    if (!m) return;
-    const mcRes = modelId === 'ensemble'
-      ? m
-      : runMonteCarlo(m.lambdaHome ?? 1.3, m.lambdaAway ?? 1.3, simCount);
-    setResult({ ...mcRes, model: modelId, useStaticFallback: result?.useStaticFallback });
+    if (!m) return; // modelo no disponible para este partido — no cambia nada
+    setActiveModel(modelId);
+    setResult(buildModelDisplay(modelId, m, simCount, result?.useStaticFallback));
   }
 
   const chartData = result ? [
@@ -451,10 +578,10 @@ export default function MatchPredictor() {
             <SectionTitle>Selección de equipos</SectionTitle>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <TeamSelector teams={displayTeams} value={homeId} onChange={v => { setHomeId(v); setResult(null); }}
-                label="🏠 Local" excludeId={awayId} />
+                label="🏠 Local" excludeId={awayId} disabled={loading} />
               <div style={{ textAlign: 'center', color: '#3a5070', fontSize: 18, fontWeight: 700 }}>vs</div>
               <TeamSelector teams={displayTeams} value={awayId} onChange={v => { setAwayId(v); setResult(null); }}
-                label="✈️ Visitante" excludeId={homeId} />
+                label="✈️ Visitante" excludeId={homeId} disabled={loading} />
             </div>
           </div>
 
@@ -462,19 +589,28 @@ export default function MatchPredictor() {
           <div className="card">
             <SectionTitle>Modelo de predicción</SectionTitle>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
-              {[...MODEL_IDS, 'ensemble'].map(id => (
-                <button key={id}
-                  onClick={() => { setActiveModel(id); if (allModelResults) switchModel(id); }}
-                  style={{
-                    padding: '5px 12px', borderRadius: 6, fontSize: 12, fontWeight: 500,
-                    cursor: 'pointer', border: '1px solid',
-                    background: activeModel === id ? '#112038' : 'transparent',
-                    borderColor: activeModel === id ? MODEL_COLORS[id] : '#162844',
-                    color: activeModel === id ? MODEL_COLORS[id] : '#5a7a9a',
-                  }}>
-                  {MODEL_LABELS[id] ?? 'Ensemble'}
-                </button>
-              ))}
+              {[...MODEL_IDS, 'ensemble'].map(id => {
+                // Una vez que ya predijimos, sabemos si este modelo está disponible
+                // para ESTE partido (h2h/market pueden ser null). Antes de predecir
+                // (allModelResults === null) no sabemos aún, así que se muestra normal.
+                const isUnavailable = allModelResults != null && allModelResults[id] == null;
+                return (
+                  <button key={id}
+                    onClick={() => switchModel(id)}
+                    disabled={isUnavailable}
+                    title={isUnavailable ? 'No disponible para este partido específico' : undefined}
+                    style={{
+                      padding: '5px 12px', borderRadius: 6, fontSize: 12, fontWeight: 500,
+                      cursor: isUnavailable ? 'not-allowed' : 'pointer', border: '1px solid',
+                      opacity: isUnavailable ? 0.35 : 1,
+                      background: activeModel === id ? '#112038' : 'transparent',
+                      borderColor: activeModel === id ? MODEL_COLORS[id] : '#162844',
+                      color: activeModel === id ? MODEL_COLORS[id] : '#5a7a9a',
+                    }}>
+                    {MODEL_LABELS[id] ?? 'Ensemble'}{isUnavailable ? ' ✕' : ''}
+                  </button>
+                );
+              })}
             </div>
 
             {activeModel === 'ensemble' && (
@@ -589,6 +725,9 @@ export default function MatchPredictor() {
                             {dq.afCount > 0 && (
                               <span style={{ color: '#FFD700' }}> · {dq.afCount} vía API-Football</span>
                             )}
+                            {dq.espnCount > 0 && (
+                              <span style={{ color: '#7AACCC' }}> · {dq.espnCount} vía ESPN</span>
+                            )}
                           </div>
                         )}
                       </div>
@@ -600,6 +739,25 @@ export default function MatchPredictor() {
                       Si un equipo fue dominante en un torneo no cubierto, esa forma reciente <strong>no llega al modelo</strong> y la predicción se apoya solo en ELO histórico.
                     </div>
                   )}
+
+                  {/* Fuentes condicionales: H2H y Mercado */}
+                  <div style={{ display: 'flex', gap: 16, marginTop: 10, borderTop: '1px solid #162844', paddingTop: 10, fontSize: 11, flexWrap: 'wrap' }}>
+                    <span style={{ color: dataQuality.h2hCount > 0 ? '#5FD3F3' : '#3a5070' }}>
+                      {dataQuality.h2hCount > 0
+                        ? `✅ Head-to-Head: ${dataQuality.h2hCount} enfrentamiento${dataQuality.h2hCount !== 1 ? 's' : ''} directo${dataQuality.h2hCount !== 1 ? 's' : ''}`
+                        : '— Head-to-Head: sin enfrentamientos previos (modelo no vota)'}
+                    </span>
+                    <span style={{ color: dataQuality.marketActive ? '#3FB950' : '#3a5070' }}>
+                      {dataQuality.marketActive
+                        ? '✅ Mercado: cuotas encontradas, votando en el ensemble'
+                        : '— Mercado: sin cuotas disponibles para este partido'}
+                    </span>
+                    <span style={{ color: dataQuality.xgReal ? '#BC8CFF' : '#3a5070' }}>
+                      {dataQuality.xgReal
+                        ? `✅ xG real: medido (${dataQuality.xgSampleHome}+${dataQuality.xgSampleAway} partidos vía API-Football)`
+                        : '— xG: aproximado desde goles (sin xG real disponible)'}
+                    </span>
+                  </div>
                 </div>
               )}
 
@@ -797,7 +955,7 @@ export default function MatchPredictor() {
               )}
 
               {/* Bookmaker odds comparison */}
-              <OddsComparison homeTeam={homeTeam} awayTeam={awayTeam} result={result} />
+              <OddsComparison homeTeam={homeTeam} awayTeam={awayTeam} result={result} oddsData={oddsData} />
 
               {/* Quick model switcher */}
               {allModelResults && (

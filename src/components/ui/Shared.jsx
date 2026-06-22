@@ -57,7 +57,7 @@ const CONF_LABEL = {
   AFC: '🌏 AFC', CAF: '🌍 CAF', OFC: '🌊 OFC',
 };
 
-export function TeamSelector({ teams, value, onChange, label, excludeId }) {
+export function TeamSelector({ teams, value, onChange, label, excludeId, disabled = false }) {
   const available = teams
     .filter(t => t.id !== excludeId)
     .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', 'es'));
@@ -83,7 +83,9 @@ export function TeamSelector({ teams, value, onChange, label, excludeId }) {
       <div style={{ position: 'relative' }}>
         <select
           value={value ?? ''}
+          disabled={disabled}
           onChange={e => onChange(e.target.value ? Number(e.target.value) : null)}
+          style={disabled ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
         >
           <option value="">— Seleccionar equipo —</option>
 
