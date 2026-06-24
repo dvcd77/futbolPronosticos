@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useApp, FALLBACK_TEAMS } from '../../context/AppContext.jsx';
 import { TeamSelector, ProbBar, SectionTitle, ErrorBox, InfoBox, Spinner, EmptyState } from '../ui/Shared.jsx';
 import ScoreMatrix from '../ui/ScoreMatrix.jsx';
@@ -200,6 +200,18 @@ function OddsComparison({ homeTeam, awayTeam, result, oddsData }) {
 function useTeamData(displayTeams) {
   const { teamMatchCache, setTeamMatchCache, setEloRatings, setApiStatus } = useApp();
 
+  // Deriva el ELO global cada vez que cambia el caché de partidos. Esto
+  // reemplaza el cálculo de ELO que antes vivía dentro del updater de
+  // setTeamMatchCache (anti-patrón). Al observar el caché, el ELO siempre
+  // refleja TODOS los partidos cargados, sin importar el orden ni el
+  // paralelismo de las cargas (home/away simultáneas).
+  useEffect(() => {
+    const allMatches = Object.values(teamMatchCache).flat();
+    if (allMatches.length > 0) {
+      setEloRatings(buildEloRatings(allMatches));
+    }
+  }, [teamMatchCache, setEloRatings]);
+
   const loadTeamData = useCallback(async (teamId) => {
     if (teamMatchCache[teamId]) return teamMatchCache[teamId];
     if (!hasApiKey() && !hasApiFootballKey()) return [];
@@ -288,12 +300,11 @@ function useTeamData(displayTeams) {
     // Orden cronológico final tras combinar las 3 fuentes
     matches.sort((a, b) => new Date(a.utcDate) - new Date(b.utcDate));
 
-    setTeamMatchCache(prev => {
-      const next = { ...prev, [teamId]: matches };
-      const allMatches = Object.values(next).flat();
-      setEloRatings(buildEloRatings(allMatches));
-      return next;
-    });
+    // Actualiza el caché con función updater PURA (sin efectos secundarios):
+    // así dos cargas en paralelo (home y away) no se pisan. El recálculo de
+    // ELO se hace en un useEffect que observa teamMatchCache (ver abajo),
+    // evitando el anti-patrón de setEloRatings dentro del updater.
+    setTeamMatchCache(prev => ({ ...prev, [teamId]: matches }));
     return matches;
   }, [teamMatchCache, setTeamMatchCache, setEloRatings, setApiStatus, displayTeams]);
 
@@ -301,12 +312,22 @@ function useTeamData(displayTeams) {
 }
 
 function dedupeKey(m) {
-  const date = (m.utcDate ?? '').slice(0, 10); // solo fecha, sin hora
+  // Dedupe por FECHA + EQUIPOS únicamente, NO por marcador.
+  //
+  // BUG CORREGIDO: antes la clave incluía el marcador. Pero football-data.org,
+  // API-Football y ESPN a veces reportan el mismo partido con marcadores
+  // ligeramente distintos (p.ej. uno cuenta el resultado tras penales y otro
+  // el del tiempo reglamentario, o difieren en la atribución de un autogol).
+  // Con el marcador en la clave, esos casos NO se detectaban como duplicados
+  // y el mismo partido se contaba dos veces — sesgando ELO, fuerzas y forma.
+  // Quitar el marcador hace el dedupe robusto: un partido entre los mismos dos
+  // equipos en la misma fecha es el mismo partido, sin importar discrepancias
+  // menores de marcador entre fuentes.
+  const date = (m.utcDate ?? '').slice(0, 10); // solo fecha (día), sin hora
   const h = String(m.homeTeam?.id ?? '');
   const a = String(m.awayTeam?.id ?? '');
-  const teams = [h, a].sort().join('-');
-  const score = `${m.score?.fullTime?.home ?? '?'}-${m.score?.fullTime?.away ?? '?'}`;
-  return `${date}_${teams}_${score}`;
+  const teams = [h, a].sort().join('-'); // ordenado: local/visita no importa
+  return `${date}_${teams}`;
 }
 
 /**

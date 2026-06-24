@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext.jsx';
 import { SectionTitle, Spinner } from '../ui/Shared.jsx';
 import { testApiKey, clearCache, getMaskedKey, hasApiKey } from '../../api/footballApi.js';
@@ -6,7 +6,7 @@ import { fetchTeams, fetchCompetitionMatches, fetchTeamMatches } from '../../api
 import { testOddsApiKey, setOddsApiKey, getMaskedOddsKey, hasOddsApiKey, clearOddsCache } from '../../api/oddsApi.js';
 import {
   testApiFootballKey, hasApiFootballKey, getMaskedApiFootballKey, clearApiFootballCache,
-  isRealXGEnabled, setRealXGEnabled,
+  isRealXGEnabled, setRealXGEnabled, getQuotaState, QUOTA_SAFETY_MARGIN,
 } from '../../api/apiFootball.js';
 import {
   isEspnEnabled, setEspnEnabled, testEspnConnection, clearEspnCache,
@@ -39,6 +39,11 @@ export default function Settings() {
   const [afTestStatus, setAfTestStatus] = useState(null);
   const [afCacheCleared, setAfCacheCleared] = useState(false);
   const [realXGOn, setRealXGOn] = useState(isRealXGEnabled());
+  const [quotaState, setQuotaState] = useState(getQuotaState());
+
+  // Refresca la cuota al entrar a Configuración — refleja el consumo hecho al
+  // predecir partidos en otras pestañas (cada predicción con xG gasta cuota).
+  useEffect(() => { setQuotaState(getQuotaState()); }, []);
 
   // ── ESPN state (fuente terciaria, sin key — solo on/off) ────────────────────
   const [espnOn, setEspnOn] = useState(isEspnEnabled());
@@ -77,6 +82,7 @@ export default function Settings() {
     setAfTestStatus('testing');
     const result = await testApiFootballKey(afKey.trim());
     setAfTestStatus(result);
+    setQuotaState(getQuotaState()); // testApiFootballKey actualiza la cuota desde /status
   }
 
   function handleClearAfCache() {
@@ -615,10 +621,45 @@ export default function Settings() {
             color: afTestStatus.ok ? '#3FB950' : '#F85149',
           }}>
             <div style={{ fontWeight: 600, marginBottom: 4 }}>
-              {afTestStatus.ok ? '✅ Conexión exitosa' : '❌ Error de conexión'}
+              {afTestStatus.ok ? '✅ Conexión exitosa' : afTestStatus.suspended ? '⏸️ Cuenta suspendida' : '❌ Error de conexión'}
             </div>
             <div style={{ fontSize: 12, color: afTestStatus.ok ? '#2a8040' : '#c04040' }}>
               {afTestStatus.message}
+            </div>
+          </div>
+        )}
+
+        {/* Monitor de cuota diaria */}
+        {hasApiFootballKey() && quotaState && (
+          <div style={{ marginTop: 12, padding: '12px 16px', background: '#0A1225', border: '1px solid #162844', borderRadius: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
+              <span className="label-sm">📊 Cuota diaria de API-Football</span>
+              <span style={{
+                fontFamily: 'monospace', fontSize: 13, fontWeight: 700,
+                color: quotaState.remaining <= QUOTA_SAFETY_MARGIN ? '#F85149'
+                  : quotaState.remaining <= 20 ? '#F5A623' : '#3FB950',
+              }}>
+                {quotaState.remaining} / {quotaState.limitDay} restantes
+              </span>
+            </div>
+            <div style={{ background: '#162844', borderRadius: 4, height: 8, overflow: 'hidden' }}>
+              <div style={{
+                width: `${(quotaState.used / quotaState.limitDay) * 100}%`,
+                height: '100%', transition: 'width 0.3s',
+                background: quotaState.remaining <= QUOTA_SAFETY_MARGIN ? '#F85149'
+                  : quotaState.remaining <= 20 ? '#F5A623' : '#3FB950',
+              }} />
+            </div>
+            <div style={{ fontSize: 11, color: '#3a5070', marginTop: 8, lineHeight: 1.6 }}>
+              {quotaState.remaining <= QUOTA_SAFETY_MARGIN ? (
+                <span style={{ color: '#F5A623' }}>
+                  ⚠️ Freno de seguridad activado. La app dejó de hacer llamadas a API-Football
+                  para no agotar la cuota (lo que suspendería la cuenta el resto del día).
+                  Se reinicia a las 00:00 UTC (7:00 PM hora Colombia).
+                </span>
+              ) : (
+                <>Usadas {quotaState.used} hoy. La app frena automáticamente al llegar a {quotaState.limitDay - QUOTA_SAFETY_MARGIN} (deja {QUOTA_SAFETY_MARGIN} de colchón). Se reinicia a las 00:00 UTC.</>
+              )}
             </div>
           </div>
         )}

@@ -17,9 +17,21 @@ export function teamStrengthFromMatches(matches, teamId, eloRatings = null) {
   );
 
   if (valid.length === 0) {
-    // ELO fallback: above-average teams attack more and concede less
+    // ELO fallback: above-average teams attack more and concede less.
+    //
+    // BUG CORREGIDO: antes se devolvía attack=f, defense=1/f. Pero como el λ
+    // se calcula como BASE * ataque_local * defensa_rival, y AMBOS factores
+    // codifican la misma diferencia de nivel, el factor ELO terminaba
+    // aplicándose AL CUADRADO — produciendo λ absurdamente altos (5.46 goles
+    // en casos extremos, marcadores tipo 6-0 como resultado más probable).
+    //
+    // Solución: usar sqrt(f). Así, cuando un equipo fuerte (ataque √f) enfrenta
+    // a uno débil (defensa √f del débil = 1/√f_débil), el producto refleja la
+    // diferencia de nivel UNA sola vez, no al cuadrado. Esto mantiene los λ en
+    // el rango realista del fútbol internacional (~0.4 a ~3.2).
     const f = eloStrengthFactor(teamId, eloRatings);
-    return { attack: f, defense: 1 / f, fromElo: true };
+    const sq = Math.sqrt(f);
+    return { attack: sq, defense: 1 / sq, fromElo: true };
   }
 
   let wScored = 0, wConceded = 0, wTotal = 0;

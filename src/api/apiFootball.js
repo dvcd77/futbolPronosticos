@@ -35,6 +35,16 @@ async function processQueue() {
   processing = true;
   while (queue.length) {
     const { url, resolve, reject } = queue.shift();
+    // Freno de cuota ANTES del sleep: si no hay cuota, rechazamos al instante
+    // en vez de esperar el intervalo de rate-limit (6.5s) por cada llamada
+    // bloqueada, lo que haría esperar al usuario inútilmente.
+    if (!hasQuotaRemaining()) {
+      const q = readQuotaState();
+      const err = new Error(`QUOTA_GUARD: freno de cuota activado (${q?.remaining ?? 0} restantes). Se reinicia a las 00:00 UTC.`);
+      err.isQuotaGuard = true;
+      reject(err);
+      continue;
+    }
     const wait = RATE_INTERVAL - (Date.now() - lastRequest);
     if (wait > 0) await sleep(wait);
     try {
@@ -75,17 +85,94 @@ export function clearApiFootballCache() {
 }
 
 // ── Core fetch ────────────────────────────────────────────────────────────────
+// ── Monitoreo de cuota ────────────────────────────────────────────────────────
+// API-Football devuelve la cuota restante en headers de CADA respuesta. Los
+// guardamos para (a) mostrarle al usuario cuánto le queda y (b) frenar las
+// llamadas ANTES de agotar la cuota (lo que suspende la cuenta el resto del día).
+const QUOTA_KEY = 'afapi_quota';
+const SAFETY_MARGIN = 5; // dejar 5 solicitudes de colchón antes del límite duro
+
+function readQuotaState() {
+  try {
+    const raw = localStorage.getItem(QUOTA_KEY);
+    if (!raw) return null;
+    const q = JSON.parse(raw);
+    // La cuota diaria se reinicia a las 00:00 UTC — si el dato es de un día
+    // UTC anterior, ya no es válido (la cuota se reinició).
+    if (q.utcDay !== currentUtcDay()) return null;
+    return q;
+  } catch { return null; }
+}
+
+function currentUtcDay() {
+  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD en UTC
+}
+
+function saveQuotaFromHeaders(headers) {
+  // Headers oficiales de API-Football (ver su documentación)
+  const limitDay = parseInt(headers.get('x-ratelimit-requests-limit') ?? '', 10);
+  const remaining = parseInt(headers.get('x-ratelimit-requests-remaining') ?? '', 10);
+  if (Number.isFinite(limitDay) && Number.isFinite(remaining)) {
+    const state = {
+      limitDay,
+      remaining,
+      used: limitDay - remaining,
+      utcDay: currentUtcDay(),
+      updatedAt: Date.now(),
+    };
+    try { localStorage.setItem(QUOTA_KEY, JSON.stringify(state)); } catch { /* full */ }
+    return state;
+  }
+  return null;
+}
+
+/** Estado de cuota actual (o null si aún no se ha hecho ninguna llamada hoy). */
+export function getQuotaState() {
+  return readQuotaState();
+}
+
+/** ¿Quedan solicitudes suficientes para hacer otra llamada con seguridad? */
+export function hasQuotaRemaining() {
+  const q = readQuotaState();
+  if (!q) return true; // sin info aún: permitimos (el primer fetch traerá el dato)
+  return q.remaining > SAFETY_MARGIN;
+}
+
+export const QUOTA_SAFETY_MARGIN = SAFETY_MARGIN;
+
+// ── Core fetch ────────────────────────────────────────────────────────────────
 async function doFetch(url) {
   const apiKey = localStorage.getItem('afapi_key');
   if (!apiKey) throw new Error('API-Football key no configurada.');
 
+  // Freno de emergencia: si ya casi no queda cuota, NO hacemos la llamada.
+  // Esto evita el último request que dispararía la suspensión por el resto
+  // del día. El error es reconocible para que la capa superior degrade limpio.
+  if (!hasQuotaRemaining()) {
+    const q = readQuotaState();
+    const err = new Error(`QUOTA_GUARD: freno de cuota activado (${q?.remaining ?? 0} solicitudes restantes, margen de seguridad ${SAFETY_MARGIN}). Se reinicia a las 00:00 UTC.`);
+    err.isQuotaGuard = true;
+    throw err;
+  }
+
   const res = await fetch(url, { headers: { 'x-apisports-key': apiKey } });
+
+  // Leer y guardar la cuota de los headers ANTES de evaluar errores
+  saveQuotaFromHeaders(res.headers);
+
   if (res.status === 429) throw new Error('Límite diario de API-Football excedido (100/día en tier gratuito).');
   if (!res.ok) throw new Error(`Error API-Football ${res.status}: ${res.statusText}`);
 
   const json = await res.json();
   if (json.errors && Object.keys(json.errors).length > 0) {
-    throw new Error(`API-Football: ${JSON.stringify(json.errors)}`);
+    // Detectar suspensión explícita para dar un mensaje claro
+    const errStr = JSON.stringify(json.errors);
+    if (/suspend/i.test(errStr)) {
+      const err = new Error('Cuenta de API-Football suspendida. Revisa dashboard.api-football.com. Si fue por cuota agotada, se reactiva a las 00:00 UTC.');
+      err.isSuspended = true;
+      throw err;
+    }
+    throw new Error(`API-Football: ${errStr}`);
   }
   return json;
 }
@@ -126,11 +213,36 @@ export async function testApiFootballKey(key) {
     const res = await fetch(`${BASE_URL}/status`, { headers: { 'x-apisports-key': key.trim() } });
     if (!res.ok) return { ok: false, message: `Error ${res.status}: ${res.statusText}` };
     const data = await res.json();
+
     if (data.errors && Object.keys(data.errors).length > 0) {
-      return { ok: false, message: JSON.stringify(data.errors) };
+      const errStr = JSON.stringify(data.errors);
+      // Mensaje específico y accionable para cuentas suspendidas
+      if (/suspend/i.test(errStr)) {
+        return {
+          ok: false,
+          suspended: true,
+          message: 'Cuenta suspendida. La causa más común es haber agotado las 100 solicitudes del día — se reactiva sola a las 00:00 UTC (7:00 PM hora Colombia). Si sigue suspendida tras el reinicio, revisa dashboard.api-football.com.',
+        };
+      }
+      return { ok: false, message: errStr };
     }
-    const remaining = data.response?.requests?.limit_day - data.response?.requests?.current;
-    return { ok: true, message: `Conexión exitosa. ${remaining ?? '?'} solicitudes restantes hoy.` };
+
+    // El endpoint /status devuelve la cuota en el cuerpo — la guardamos también
+    const reqs = data.response?.requests;
+    if (reqs && Number.isFinite(reqs.limit_day) && Number.isFinite(reqs.current)) {
+      try {
+        localStorage.setItem(QUOTA_KEY, JSON.stringify({
+          limitDay: reqs.limit_day,
+          remaining: reqs.limit_day - reqs.current,
+          used: reqs.current,
+          utcDay: currentUtcDay(),
+          updatedAt: Date.now(),
+        }));
+      } catch { /* full */ }
+    }
+
+    const remaining = (reqs?.limit_day ?? 100) - (reqs?.current ?? 0);
+    return { ok: true, message: `Conexión exitosa. ${remaining} de ${reqs?.limit_day ?? 100} solicitudes restantes hoy.` };
   } catch (e) {
     return { ok: false, message: `Error de red: ${e.message}` };
   }
