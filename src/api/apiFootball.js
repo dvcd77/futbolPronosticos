@@ -13,6 +13,8 @@
  * Auth: header `x-apisports-key` — requiere proxy (CORS) igual que football-data.org.
  */
 
+import { serverHasApiFootball } from './serverConfig.js';
+
 const BASE_URL = '/api/apifootball';   // → proxy server-side (ver server.js)
 const RATE_INTERVAL = 6500;            // ~9.2 req/min, deja margen sobre el límite de 10/min
 const CACHE_PREFIX = 'afapi_';
@@ -143,7 +145,11 @@ export const QUOTA_SAFETY_MARGIN = SAFETY_MARGIN;
 // ── Core fetch ────────────────────────────────────────────────────────────────
 async function doFetch(url) {
   const apiKey = localStorage.getItem('afapi_key');
-  if (!apiKey) throw new Error('API-Football key no configurada.');
+
+  // Key local tiene prioridad; si no hay, el servidor inyecta su token.
+  if (!apiKey && !serverHasApiFootball()) {
+    throw new Error('API-Football key no configurada.');
+  }
 
   // Freno de emergencia: si ya casi no queda cuota, NO hacemos la llamada.
   // Esto evita el último request que dispararía la suspensión por el resto
@@ -155,7 +161,9 @@ async function doFetch(url) {
     throw err;
   }
 
-  const res = await fetch(url, { headers: { 'x-apisports-key': apiKey } });
+  // Si hay key local la enviamos; si no, sin header (el servidor la inyecta).
+  const headers = apiKey ? { 'x-apisports-key': apiKey } : {};
+  const res = await fetch(url, { headers });
 
   // Leer y guardar la cuota de los headers ANTES de evaluar errores
   saveQuotaFromHeaders(res.headers);
@@ -187,7 +195,7 @@ async function fetchCached(url, ttl) {
 
 // ── Public API ──────────────────────────────────────────────────────────────
 
-export function hasApiFootballKey() { return !!localStorage.getItem('afapi_key'); }
+export function hasApiFootballKey() { return !!localStorage.getItem('afapi_key') || serverHasApiFootball(); }
 export function getMaskedApiFootballKey() {
   const k = localStorage.getItem('afapi_key') ?? '';
   return k ? k.slice(0, 4) + '****' + k.slice(-4) : '';

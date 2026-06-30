@@ -43,9 +43,27 @@ export function teamStrengthFromMatches(matches, teamId, eloRatings = null) {
     wTotal    += w;
   });
 
+  // Fuerzas crudas: ratio del rendimiento del equipo vs la media del fútbol.
+  const rawAttack  = (wScored   / wTotal) / BASE_LAMBDA;
+  const rawDefense = (wConceded / wTotal) / BASE_LAMBDA;
+
+  // SHRINKAGE (regularización): los modelos Poisson sin regularizar son
+  // notoriamente SOBRECONFIADOS — multiplican ataque_local × defensa_rival sin
+  // atenuar, amplificando las diferencias y dando probabilidades extremas
+  // (p.ej. 81% al favorito cuando Form/xG/ELO dan 61-67%). Para corregirlo,
+  // encogemos cada fuerza hacia 1.0 (la media) con un factor SHRINK. Esto
+  // refleja que el rendimiento pasado es una señal RUIDOSA del nivel real:
+  // un equipo que marcó 2.5/partido probablemente es bueno, pero no TAN bueno
+  // como sugiere el dato crudo (regresión a la media). SHRINK=0.60 calibra la
+  // confianza de Poisson para que quede alineada con Form (~61%) y xG (~62%)
+  // en el mismo partido, en vez del 81% sobreconfiado de antes.
+  const SHRINK = 0.60;
+  const attack  = 1 + SHRINK * (rawAttack  - 1);
+  const defense = 1 + SHRINK * (rawDefense - 1);
+
   return {
-    attack:  clamp((wScored   / wTotal) / BASE_LAMBDA, 0.30, 4.0),
-    defense: clamp((wConceded / wTotal) / BASE_LAMBDA, 0.30, 4.0),
+    attack:  clamp(attack,  0.35, 3.0),
+    defense: clamp(defense, 0.35, 3.0),
     fromElo: false,
     matchCount: valid.length,
   };

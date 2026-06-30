@@ -12,13 +12,16 @@
  *      removiendo el margen de la casa (vig/overround)
  */
 
+import { serverHasOdds } from './serverConfig.js';
+
 const BASE_URL  = '/api/odds';
 const SPORT_KEY = 'soccer_fifa_world_cup';
 const CACHE_KEY = 'oddsapi_wc_events';
 const CACHE_TTL = 60 * 60_000; // 1 hora — proteger cuota mensual (500 req/mes)
 
 // ── localStorage key management ───────────────────────────────────────────────
-export function hasOddsApiKey() { return !!localStorage.getItem('oddsapi_key'); }
+// hasOddsApiKey considera tanto la key local como el token del servidor.
+export function hasOddsApiKey() { return !!localStorage.getItem('oddsapi_key') || serverHasOdds(); }
 export function getOddsApiKey() { return localStorage.getItem('oddsapi_key') ?? ''; }
 export function setOddsApiKey(key) { localStorage.setItem('oddsapi_key', key.trim()); }
 export function getMaskedOddsKey() {
@@ -64,14 +67,16 @@ export async function fetchWorldCupOdds(force = false) {
   }
 
   const key = getOddsApiKey();
-  if (!key) throw new Error('API key de cuotas no configurada.');
+  if (!key && !serverHasOdds()) throw new Error('API key de cuotas no configurada.');
 
+  // Si hay key local la incluimos en el query; si no, la omitimos y el servidor
+  // (Render) inyectará su token compartido antes de reenviar a The Odds API.
   const url = `${BASE_URL}/sports/${SPORT_KEY}/odds`
-    + `?apiKey=${encodeURIComponent(key)}`
-    + `&regions=us,uk,eu`
+    + `?regions=us,uk,eu`
     + `&markets=h2h,totals`
     + `&oddsFormat=decimal`
-    + `&dateFormat=iso`;
+    + `&dateFormat=iso`
+    + (key ? `&apiKey=${encodeURIComponent(key)}` : '');
 
   const res = await fetch(url);
   if (res.status === 401) throw new Error('API key de cuotas inválida.');

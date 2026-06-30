@@ -10,6 +10,7 @@ import Backtest from './components/tabs/Backtest.jsx';
 import History from './components/tabs/History.jsx';
 import Settings from './components/tabs/Settings.jsx';
 import { hasApiKey } from './api/footballApi.js';
+import { loadServerConfig } from './api/serverConfig.js';
 
 function AppContent() {
   const [activeTab, setActiveTab] = useState('predictor');
@@ -17,7 +18,12 @@ function AppContent() {
 
   useEffect(() => {
     setTeams(FALLBACK_TEAMS);
-    setApiStatus({ ok: hasApiKey() ? true : false, queue: 0 });
+    // Carga la config del servidor (qué tokens compartidos provee) ANTES de
+    // evaluar el estado de las APIs. Así, si el servidor tiene los tokens,
+    // la app los reconoce sin que el usuario ingrese nada en este dispositivo.
+    loadServerConfig().then(() => {
+      setApiStatus({ ok: hasApiKey(), queue: 0 });
+    });
   }, []);
 
   return (

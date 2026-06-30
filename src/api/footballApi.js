@@ -1,3 +1,5 @@
+import { serverHasFootballData } from './serverConfig.js';
+
 const BASE_URL = '/api/football';    // → proxy en el mismo servidor (sin CORS)
 const RATE_INTERVAL = 6200;   // ms between requests (10/min = 1/6s + buffer)
 const CACHE_PREFIX = 'fdapi_';
@@ -67,9 +69,16 @@ export function clearCache() {
 // ── Core fetch ────────────────────────────────────────────────────────────────
 async function doFetch(url) {
   const apiKey = localStorage.getItem('fdapi_key');
-  if (!apiKey) throw new Error('API key no configurada. Ve a Configuración.');
 
-  const res = await fetch(url, { headers: { 'X-Auth-Token': apiKey } });
+  // Si hay key local, la enviamos (tiene prioridad). Si no, hacemos la petición
+  // sin header: el servidor (Render) inyectará su propio token compartido. Solo
+  // fallamos si NO hay key local NI token de servidor disponible.
+  if (!apiKey && !serverHasFootballData()) {
+    throw new Error('API key no configurada. Ve a Configuración.');
+  }
+
+  const headers = apiKey ? { 'X-Auth-Token': apiKey } : {};
+  const res = await fetch(url, { headers });
 
   if (res.status === 429) throw new Error('Límite de rate excedido. Espera un momento.');
   if (res.status === 403) throw new Error('API key inválida o sin permisos para esta competencia.');
@@ -157,7 +166,7 @@ export async function fetchScorers(competitionCode = 'WC', limit = 50) {
 export function getQueueLength() { return queue.length; }
 
 /** Returns true if an API key is stored */
-export function hasApiKey() { return !!localStorage.getItem('fdapi_key'); }
+export function hasApiKey() { return !!localStorage.getItem('fdapi_key') || serverHasFootballData(); }
 
 /** Get stored API key (masked) */
 export function getMaskedKey() {

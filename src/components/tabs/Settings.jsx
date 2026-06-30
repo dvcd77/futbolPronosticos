@@ -16,6 +16,7 @@ import { buildNameToTeamMap, normalizeTeamName } from '../../api/apiFootball.js'
 import { buildEloRatings } from '../../models/elo.js';
 import { FALLBACK_TEAMS } from '../../context/AppContext.jsx';
 import { DEFAULT_WEIGHTS } from '../../models/ensemble.js';
+import { serverHasFootballData, serverHasApiFootball, serverHasOdds } from '../../api/serverConfig.js';
 
 export default function Settings() {
   const { simCount, setSimCount, setWeights, teams, setTeams, setEloRatings, setTeamMatchCache, setApiStatus } = useApp();
@@ -271,32 +272,42 @@ export default function Settings() {
     {
       name: 'football-data.org',
       active: hasApiKey(),
-      detail: hasApiKey()
-        ? 'Configurada. Carga MASIVA con el botón de abajo (48 equipos + partidos del Mundial de una vez).'
+      fromServer: serverHasFootballData(),
+      detail: serverHasFootballData()
+        ? 'Provista por el servidor (compartida en todos los dispositivos). No necesitas ingresar nada.'
+        : hasApiKey()
+        ? 'Configurada en este dispositivo. Carga MASIVA con el botón de abajo.'
         : 'Sin configurar.',
       manual: true,
     },
     {
       name: 'API-Football',
       active: hasApiFootballKey(),
-      detail: hasApiFootballKey()
-        ? 'Configurada. Se activa AUTOMÁTICAMENTE solo al predecir un partido — busca datos únicamente de esos 2 equipos, no de los 48.'
+      fromServer: serverHasApiFootball(),
+      detail: serverHasApiFootball()
+        ? 'Provista por el servidor (compartida en todos los dispositivos). Se usa automáticamente al predecir.'
+        : hasApiFootballKey()
+        ? 'Configurada en este dispositivo. Se activa automáticamente al predecir un partido.'
         : 'Sin configurar.',
       manual: false,
     },
     {
       name: 'ESPN',
       active: isEspnEnabled(),
+      fromServer: false,
       detail: isEspnEnabled()
-        ? 'Activada. Igual que API-Football: se consulta automáticamente solo al predecir, solo para los 2 equipos del partido.'
+        ? 'Activada. Se consulta automáticamente al predecir (no requiere token).'
         : 'Desactivada.',
       manual: false,
     },
     {
       name: 'Cuotas (The Odds API)',
       active: hasOddsApiKey(),
-      detail: hasOddsApiKey()
-        ? 'Configurada. Se consulta automáticamente al predecir; si hay mercado abierto, vota como modelo "Mercado" en el ensemble.'
+      fromServer: serverHasOdds(),
+      detail: serverHasOdds()
+        ? 'Provista por el servidor (compartida en todos los dispositivos). Vota como modelo "Mercado".'
+        : hasOddsApiKey()
+        ? 'Configurada en este dispositivo. Se consulta automáticamente al predecir.'
         : 'Sin configurar.',
       manual: false,
     },
@@ -320,10 +331,13 @@ export default function Settings() {
               <div>
                 <div style={{ fontSize: 13, color: s.active ? '#D8E6F3' : '#5a7a9a', fontWeight: 600 }}>
                   {s.name}
-                  {s.manual && (
+                  {s.fromServer && (
+                    <span style={{ fontSize: 10, color: '#3FB950', marginLeft: 6, fontWeight: 600 }}>· 🌐 servidor</span>
+                  )}
+                  {!s.fromServer && s.manual && (
                     <span style={{ fontSize: 10, color: '#FFD700', marginLeft: 6, fontWeight: 500 }}>· carga manual</span>
                   )}
-                  {!s.manual && (
+                  {!s.fromServer && !s.manual && (
                     <span style={{ fontSize: 10, color: '#7AACCC', marginLeft: 6, fontWeight: 500 }}>· carga automática por partido</span>
                   )}
                 </div>
